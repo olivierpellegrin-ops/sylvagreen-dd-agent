@@ -2,9 +2,8 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir "mistralai>=3.0" "httpx>=0.27" "pydantic>=2"
 
-COPY . .
+COPY worker.py dd_ingest.py ./
 
 CMD ["python", "worker.py"]
