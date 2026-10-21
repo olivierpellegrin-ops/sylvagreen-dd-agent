@@ -1,13 +1,6 @@
-# Agent DD Ingest — SylvaGreen Capital
-# Worker : enregistre le workflow "dd-overview-ingest" auprès de Mistral Workflows.
-import mistralai.workflows as workflows
+import asyncio
 
-from dd_ingest import DDOverviewIngestWorkflow
-
-
-def main() -> None:
-    workflows.run_worker([DDOverviewIngestWorkflow])
-
+from entrypoints.worker import main
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())
