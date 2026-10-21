@@ -10,8 +10,12 @@ from typing import Optional
 
 import httpx
 import mistralai.workflows as workflows
-from mistralai.client import Mistral
-from mistralai.client.models import File
+from mistralai import Mistral
+
+try:
+    from mistralai.models import File
+except ImportError:
+    from mistralai.client.models import File
 from pydantic import BaseModel
 
 PAPPERS_BASE = "https://api.pappers.fr/v2"
@@ -247,7 +251,7 @@ Nombre d'établissements actifs : {len([e for e in (fiche.get("etablissements") 
 @workflows.activity()
 async def upload_vers_bibliotheque(library_id: str, documents: list) -> list:
     """Dépose chaque document markdown dans la bibliothèque DD (API Mistral Libraries)."""
-    client = Mistral(api_key=os.environ["MISTRAL_API_KEY"])
+    client = Mistral()  # token service-account via MISTRAL_SA_TOKEN_PATH, lu par le SDK
     deposes = []
     for doc in documents:
         fichier = File(
