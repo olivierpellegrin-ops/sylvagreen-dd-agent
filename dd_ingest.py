@@ -2,7 +2,7 @@
 # Pipeline : API Pappers (v2) -> documents markdown -> bibliothèque DD (ex. "BB BGI").
 # Secrets requis (Secrets Manager du workspace, liés au déploiement) :
 #   - PAPPERS_API_KEY : clé API de votre compte Pappers (onglet API de pappers.fr)
-#   - MISTRAL_API_KEY : clé API Mistral (accès aux Libraries)
+#   - MISTRAL_API_KEY : injectée automatiquement par la plateforme (nom réservé)
 
 import io
 import os
@@ -61,6 +61,21 @@ async def fetch_fiche(siren: str) -> dict:
         return r.json()
 
 
+@workflows.activity()
+async def fetch_scoring(siren: str) -> dict:
+    """Récupère le score de solvabilité Pappers (F4). Echoue proprement si l'offre scoring n'est pas active."""
+    async with httpx.AsyncClient(timeout=30) as client:
+        r = await client.get(
+            f"{PAPPERS_BASE}/scoring",
+            params={"siren": siren},
+            headers=_headers_pappers(),
+        )
+        if r.status_code in (402, 403, 404):
+            return {"disponible": False, "raison": f"HTTP {r.status_code}"}
+        r.raise_for_status()
+        return {"disponible": True, **r.json()}
+
+
 def _fmt_montant(v: Optional[float]) -> str:
     if v is None:
         return "n/d"
@@ -73,8 +88,8 @@ def _fmt_pct(v: Optional[float]) -> str:
     return f"{v * 100:.1f} %"
 
 
-def generer_documents(fiche: dict) -> list:
-    """Transforme la fiche Pappers en documents markdown prêts pour la bibliothèque DD.
+def generer_documents(fiche: dict, scoring: dict) -> list:
+    """Transforme la fiche Pappers + scoring en documents markdown pour la bibliothèque DD.
 
     Aligné sur le canvas « DD Overview — Check-up Express » : identité (TRV),
     synthèse financière (FIN), gouvernance & contentieux (JUR), et données
@@ -142,6 +157,21 @@ Nombre d'établissements actifs : {len([e for e in (fiche.get("etablissements") 
     if derniere.get("ca") and derniere.get("resultat_net") is not None:
         rentabilite = _fmt_pct(derniere["resultat_net"] / derniere["ca"]) + " (résultat net / CA, dernier exercice)"
 
+    if scoring.get("disponible"):
+        bloc_score = f"""## Score de solvabilité Pappers (F4)
+
+- **Note** : {scoring.get("note", "n/d")} / 20
+- **Probabilité de défaut à 12 mois** : {scoring.get("probabilite_defaillance", "n/d")}
+- **Algorithme** : {scoring.get("algorithme", "n/d")}
+- Détail : voir données brutes (ANX-00)
+"""
+    else:
+        bloc_score = """## Score de solvabilité Pappers (F4)
+
+- Non disponible sur cette clé API ({raison}).
+- En attente : score Infolegale (négociation en cours) ou activation de l'offre scoring Pappers.
+""".replace("{raison}", scoring.get("raison", "n/d"))
+
     doc_finances = f"""# Synthèse financière — {nom}
 
 > Source : API Pappers — collecte automatisée (agent DD Ingest). SIREN : {siren}
@@ -157,6 +187,8 @@ Nombre d'établissements actifs : {len([e for e in (fiche.get("etablissements") 
 - **Croissance du CA (F2)** : {croissance}
 - **Rentabilité (F3)** : {rentabilite}
 - **Comptes déposés (F1)** : {len(finances)} exercices trouvés sur la fiche
+
+{bloc_score}
 
 *Notes : montants bruts tels que déposés aux greffes ; vérifier la confidentialité éventuelle des comptes.*
 """
@@ -234,8 +266,8 @@ async def upload_vers_bibliotheque(library_id: str, documents: list) -> list:
     workflow_display_name="DD Overview Ingest",
     workflow_description=(
         "Collecte les données publiques Pappers d'une société cible "
-        "(identité, finances, dirigeants, procédures) et alimente "
-        "automatiquement la bibliothèque DD du fonds."
+        "(identité, finances, dirigeants, procédures, score de solvabilité) "
+        "et alimente automatiquement la bibliothèque DD du fonds."
     ),
 )
 class DDOverviewIngestWorkflow:
@@ -243,22 +275,29 @@ class DDOverviewIngestWorkflow:
     async def run(self, input: DDIngestInput) -> dict:
         # 1. Identifier la cible
         if input.siren:
-            fiche = await fetch_fiche(input.siren)
+            siren = input.siren
         elif input.nom_entreprise:
             trouve = await resoudre_siren(input.nom_entreprise)
-            fiche = await fetch_fiche(trouve["siren"])
+            siren = trouve["siren"]
         else:
             raise ValueError("Fournir 'siren' ou 'nom_entreprise' en entrée.")
 
-        # 2. Générer les documents (fonction pure, déterministe)
-        documents = generer_documents(fiche)
+        # 2. Collecter fiche + scoring en parallèle
+        fiche, scoring = await workflows.gather(
+            fetch_fiche(siren),
+            fetch_scoring(siren),
+        )
 
-        # 3. Déposer dans la bibliothèque DD
+        # 3. Générer les documents (fonction pure, déterministe)
+        documents = generer_documents(fiche, scoring)
+
+        # 4. Déposer dans la bibliothèque DD
         deposes = await upload_vers_bibliotheque(input.library_id, documents)
 
         return {
             "siren": fiche.get("siren"),
             "denomination": fiche.get("denomination") or fiche.get("nom_entreprise"),
             "bibliotheque": input.library_id,
+            "scoring_disponible": scoring.get("disponible"),
             "documents_deposes": deposes,
         }
