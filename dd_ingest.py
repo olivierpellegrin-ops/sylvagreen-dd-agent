@@ -282,11 +282,9 @@ class DDOverviewIngestWorkflow:
         else:
             raise ValueError("Fournir 'siren' ou 'nom_entreprise' en entrée.")
 
-        # 2. Collecter fiche + scoring en parallèle
-        fiche, scoring = await workflows.gather(
-            fetch_fiche(siren),
-            fetch_scoring(siren),
-        )
+        # 2. Collecter fiche puis scoring (sequentiel, plus sur)
+        fiche = await fetch_fiche(siren)
+        scoring = await fetch_scoring(siren)
 
         # 3. Générer les documents (fonction pure, déterministe)
         documents = generer_documents(fiche, scoring)
