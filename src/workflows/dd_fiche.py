@@ -1,27 +1,19 @@
-"""Etape 2 : fiche Pappers d'une cible (test API, sans depot de documents)."""
+"""Workflow dd-fiche : synthese Pappers d'une cible (etape de test)."""
 
-import os
+from __future__ import annotations
 
-import httpx
+import mistralai.workflows as workflows
+from mistralai.workflows import workflow
 from pydantic import BaseModel
 
-from mistralai import workflows
-
-PAPPERS_BASE = "https://api.pappers.fr/v2"
+# Les activites (qui importent httpx) doivent passer par imports_passed_through,
+# sinon le sandbox Temporal tente de re-importer httpx et echoue.
+with workflow.unsafe.imports_passed_through():
+    from .dd_activities import fetch_fiche
 
 
 class FicheInput(BaseModel):
     siren: str
-
-
-@workflows.activity()
-async def fetch_fiche(siren: str) -> dict:
-    # Authentification Pappers v2 : parametre api_token (ni en-tete api-key, ni api_token).
-    params = {"siren": siren, "api_token": os.environ["PAPPERS_API_KEY"]}
-    async with httpx.AsyncClient(timeout=30) as client:
-        r = await client.get(f"{PAPPERS_BASE}/entreprise", params=params)
-        r.raise_for_status()
-        return r.json()
 
 
 @workflows.workflow.define(
