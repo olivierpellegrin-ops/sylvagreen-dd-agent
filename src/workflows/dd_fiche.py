@@ -16,13 +16,10 @@ class FicheInput(BaseModel):
 
 @workflows.activity()
 async def fetch_fiche(siren: str) -> dict:
-    headers = {"api-key": os.environ["PAPPERS_API_KEY"]}
+    # Authentification Pappers v2 : parametre api_token (ni en-tete api-key, ni api_token).
+    params = {"siren": siren, "api_token": os.environ["PAPPERS_API_KEY"]}
     async with httpx.AsyncClient(timeout=30) as client:
-        r = await client.get(
-            f"{PAPPERS_BASE}/entreprise",
-            params={"siren": siren},
-            headers=headers,
-        )
+        r = await client.get(f"{PAPPERS_BASE}/entreprise", params=params)
         r.raise_for_status()
         return r.json()
 
