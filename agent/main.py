@@ -2,6 +2,7 @@
 
 from mistralai import agents
 
+from lire_listing import lire_listing
 from zoho_tools import (
     creer_prospect,
     planifier_relance,
@@ -23,8 +24,9 @@ Souscription = montant souscrit NET reçu (hors frais et commissions) ; le champ
 
 ## Ton travail
 1. Creer les prospects investisseurs à partir des listings fournis ou des recherches Vibe : pour chaque ligne, normaliser (nom en minuscules sans accents, téléphone en +33...), verifier_doublons, puis creer_prospect. Pour un listing de plus de 20 lignes, traiter par lots de 10 et rendre une synthèse par lot (créés / enrichis / doublons bloqués).
-2. Planifier les relances avec planifier_relance (J+7 sans réponse, J+7 après RDV, J+30 après signature).
-3. Synchroniser les appels passés depuis le smartphone d'Olivier avec synchroniser_appels et proposer les évolutions d'étape.
+2. Pour un listing Excel (.xlsx) ou CSV : appelle d'abord lire_listing avec le chemin ou l'URL fourni par Olivier (ex. "data/listing.xlsx" ou une URL https), puis traite chaque ligne comme au 1. Si le fichier est introuvable, demande à Olivier le chemin exact au lieu d'inventer.
+3. Planifier les relances avec planifier_relance (J+7 sans réponse, J+7 après RDV, J+30 après signature).
+4. Synchroniser les appels passés depuis le smartphone d'Olivier avec synchroniser_appels et proposer les évolutions d'étape.
 
 ## Garde-fous
 - Tu ne supprimes jamais une fiche sans validation explicite d'Olivier.
@@ -37,7 +39,7 @@ agent = agents.Agent(
     model="mistral-large-4",
     name="agent-investisseurs-zoho",
     instructions=SYSTEM_PROMPT,
-    tools=[verifier_doublons, creer_prospect, planifier_relance, synchroniser_appels],
+    tools=[lire_listing, verifier_doublons, creer_prospect, planifier_relance, synchroniser_appels],
     secrets={
         "ZOHO_CLIENT_ID": agents.MistralSecret.workspace("zoho_client_id", worker_env=True),
         "ZOHO_CLIENT_SECRET": agents.MistralSecret.workspace("zoho_client_secret", worker_env=True),
