@@ -146,8 +146,7 @@ async def _ajouter_note(client: httpx.AsyncClient, headers: dict, module: str, r
     desc = (data[0].get("Description") or "") if data else ""
     if note in desc:
         return {"deja_present": True}
-    nouvelle = (desc + ("
-" if desc else "") + note).strip()
+    nouvelle = (desc + ("\n" if desc else "") + note).strip()
     r2 = await client.put(
         f"{ZOHO_CRM}/{module}/{record_id}",
         headers=headers,
