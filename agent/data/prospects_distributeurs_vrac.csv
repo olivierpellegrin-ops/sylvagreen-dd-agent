@@ -1,0 +1,50 @@
+Rang,Civilité,Prénom,Nom,Fonction,Société (dénomination actuelle),Adresse (voie),Code postal,Ville,Score natif,CA dernier ex. (€),Effectif,SIREN,Fiabilité,Dir. sur site
+1,Mme,Roselyne,BERNEAU,Gérant,ALAIN THEVENIN SARL,14 ROUTE DE VEAUGUES,18300,Jalognes,17,56913457,Entre 20 et 49 salariés,431746742,Bonne,Oui
+2,M.,André,GUILLEMEAU,Gérant,ETABLISSEMENTS GUILLEMEAU SARL,7 rue de la Guette,89450,Domecy-sur-Cure,17,50663517,Entre 20 et 49 salariés,421036112,Bonne,Oui
+3,M.,Maxence,PISKORSKI,Directeur général,PISKORSKI et Fils,8 AVENUE DE VERDUN,55110,Brieulles-sur-Meuse,17,26463033,Entre 50 et 99 salariés,337862791,Bonne,Oui
+4,M.,Jean-pierre,CARRON,Directeur général,CARRON,BP 45 AVENUE DU 22 AOUT 1944,38350,La Mure,17,25776972,Entre 200 et 249 salariés,384533196,Bonne,Oui
+5,M.,Maxime,PLANTIER,Gérant,TRANS NATURAL,109 ROUTE DE MONTRIGAUD,38940,Saint-Clair-sur-Galaure,17,20749494,Entre 50 et 99 salariés,494487226,Bonne,Oui
+6,M.,Didier,VAGNAUX,Président,SOCIETE COOPERATIVE AGRICOLE INTERVAL,ZI LES GIRANAUX,70100,Arc-les-Gray,16,190091525,Entre 200 et 249 salariés,778372474,Bonne,Non
+7,Mme,Bernadette,VILLEMONT,"Président du conseil d'administration, Directeur général, Administrateur",ETABLISSEMENTS A. VILLEMONT,11 ROUTE DE SAINT LACTENCIN,36500,Argy,16,131651743,Entre 100 et 199 salariés,778137703,À vérifier,Oui
+8,M.,Xavier,MARTIN,Administrateur,CFBL (société coopérative agricole),8 RUE GEORGY GAUTHIER,19200,Ussel,16,67329990,Entre 200 et 249 salariés,777944596,Bonne,Non
+9,M.,Patrice,TEYSSIER,Directeur général,SCIERIE MOULIN,ZA DE VILLE,43220,Dunieres,16,61907563,Entre 100 et 199 salariés,330824442,Bonne,Non
+10,M.,Yann,MENGUY,Directeur général,BRETAGNE MULTI-ENERGIES,42 RUE JACQUES ANQUETIL,29000,Quimper,16,55227117,Entre 50 et 99 salariés,409374295,Bonne,Non
+11,M.,Marc,SOLFA,Président,ETABLISSEMENTS SOLFA CARBURANTS,26 RUE DE L'EGLISE,41270,Villebout,16,40038502,Entre 20 et 49 salariés,597120286,Bonne,Oui
+12,M.,Nicolas,GENEST,Gérant,BONNEFOY-PASCAL,MAGASIN GEDIMAT 27 ROUTE DU LAC D'ISSARLES,07470,Coucouron,16,16454670,Entre 20 et 49 salariés,306425901,Bonne,Oui
+13,M.,Patrick,MESNARD,Directeur général,DUREPAIRE,IMPASSE DU LOGIS,16140,Verdille,16,14601163,Entre 20 et 49 salariés,318250594,Bonne,Oui
+14,M.,Christian,BRALEY,Gérant,BRALEY-ROUERGUE LOCA-BENNE,LD BEZONNES,12340,Rodelle,16,14259134,Entre 20 et 49 salariés,413065665,Bonne,Oui
+15,M.,Francois,IOOS,"Président du conseil d'administration, Administrateur",CPE - BARDOUT,40 AVENUE MARECHAL JOFFRE,51200,Epernay,15,91124033,Entre 20 et 49 salariés,422596239,Bonne,Non
+16,M.,Jean-pascal,ARCHIMBAUD,Président,SCIERIE ARCHIMBAUD ET FILS,7 chemin de Dare,79170,Secondigné-sur-Belle,15,49034802,Entre 100 et 199 salariés,331152173,Bonne,Non
+17,M.,François,CHAPON,"Président du conseil d'administration, Directeur général, Administrateur",COGRA 48,LOT ZONE ARTISANALE DE GARDES,48000,Mende,15,34279953,Entre 50 et 99 salariés,324894666,À vérifier,Oui
+18,M.,Jérome,Baudouin,Directeur général,COSYLVA,2 IMPASSE DE LA CHASSAGNE,23400,Bourganeuf,15,21406758,Entre 50 et 99 salariés,324860501,Bonne,Non
+19,M.,Christian,SINGLA,"Vice-président du conseil de surveillance, Membre du conseil de surveillance",ROUERGUE AUVERGNE GEVAUDAN TARNAIS,RUE EMILE SINGLA,12000,Rodez,15,14191915,Entre 50 et 99 salariés,425780434,Bonne,Non
+20,M.,Christophe,GRISON,Président,COOPERATIVE AGRICOLE VALFRANCE,126 AVENUE DU POTEAU,60300,Senlis,14,333011309,Entre 100 et 199 salariés,775629033,À vérifier,Non
+21,M.,Jean,WALCH,Président,ETABLISSEMENTS LUCIEN WALCH,1 RUE DE L'EGLISE,68520,Burnhaupt-le-Bas,14,47761782,Entre 20 et 49 salariés,947352175,Bonne,Non
+22,M.,Jean-luc,CADE,Président,MAUDET S.A.S.,2 RUE DU CHAMP SOREAU,72170,Beaumont-sur-Sarthe,14,43754547,Entre 20 et 49 salariés,347821340,Bonne,Non
+23,M.,Thibault,LESIEUR,Gérant,SARL VAUTHIER-SEPAC,AVRECOURT RUE DE BELFAYS,52140,Avrecourt,14,26090992,Entre 20 et 49 salariés,332108786,Bonne,Non
+24,M.,Claude,FERRANDI,Directeur général délégué,HENRI FERRANDI,PURETTONE,20290,Borgo,14,19161508,Entre 20 et 49 salariés,310036744,Bonne,Non
+25,M.,Alain,CASSIER,"Président du conseil de surveillance, Membre du conseil de surveillance",HOLDING CASSIER,33 AVENUE LOUIS COUDANT,58340,Cercy-la-Tour,14,8631948,Entre 10 et 19 salariés,399502897,Bonne,Oui
+26,M.,Mathieu,FLEURY,Président,BIOCOMBUSTIBLES SAS,COPROPRIETE EUPHORBE - BATIMENT B ROUTE DES DIGUES,14123,Fleury-sur-Orne,13,26969407,Entre 10 et 19 salariés,403614217,Bonne,Non
+27,M.,Alain,DELDOSSI,Président,ENTREPRISE DELDOSSI,LA POINTE 490 ROUTE DE TOULOUSE,81370,Saint-Sulpice-la-Pointe,13,26048565,Entre 10 et 19 salariés,305390585,Bonne,Non
+28,M.,Maurizio,ANNOVATI,"Directeur général, Administrateur",ALPIN PELLET,12 RUE DU BOIS DE L'ILE,73460,Tournon,13,23206817,Entre 10 et 19 salariés,502258569,Bonne,Non
+29,M.,Alain,COIGNET,Directeur général délégué,ETS COIGNET,LES NASLOTS,58220,Ciez,13,20602407,Entre 10 et 19 salariés,312057318,Bonne,Non
+30,M.,Patrick,GUILLEMONT,Gérant,ETS GABRIEL GUILLEMONT,2 RUE DU PIED DE SELLE,80170,Rosieres-en-Santerre,13,18296455,Entre 20 et 49 salariés,424452621,Bonne,Non
+31,M.,Jean-philippe,BERNARD,Directeur général,CERETRANS,76 AVENUE DE MARBOZ,01000,Bourg-en-Bresse,13,9260907,Entre 20 et 49 salariés,764201174,Bonne,Non
+32,M.,Rudy,DE SAINTE MARESVILLE,Gérant,ETS DE SAINTE MARESVILLE,7 RUE LEON JOUHAUX,62575,Blendecques,12,8398898,Entre 10 et 19 salariés,452721152,Bonne,Non
+33,M.,Paul,GARCIN,Président,ETABLISSEMENTS GARCIN FRERES,RUE BRECHE,04210,Valensole,12,8238381,Entre 10 et 19 salariés,006850234,À vérifier,Oui
+34,Mme,Carine,BATTUZ,Directeur général,PECHAVY ENERGIES ALTERNATIVES,LD LE TREIL 612 AVENUE DU BRUILHOIS,47520,Le Passage,12,6753386,Entre 10 et 19 salariés,750580565,Bonne,Non
+35,M.,Pierre,JACQUIN,Directeur général,MOULIN DE SARRALBE,46 RUE DU MOULIN,57430,Sarralbe,11,5397814,Entre 20 et 49 salariés,655580587,À vérifier,Non
+36,M.,Thierry,TOUYRE,Gérant,TRANSPORTS TOUYRE,5 RUE DU MARTROU,15120,Labesserette,11,,Entre 20 et 49 salariés,352471635,Bonne,Oui
+37,M.,Fabien,GAYRAUD,Gérant,2AVF ENERGIES,DESCAILLAUX,31430,Saint-Elix-le-Chateau,11,,Entre 20 et 49 salariés,511007734,Bonne,Oui
+38,M.,Michel,PAYRE,Président,PAYRE NORBERT,SILOS LES VERNES,38430,Moirans,11,,Entre 20 et 49 salariés,321775173,Bonne,Oui
+39,M.,Christian,LEJEUNE,Gérant,SCIERIE LEJEUNE SARL,1 CHEMIN DU MOULIN,57410,Siersthal,11,,Entre 20 et 49 salariés,404370785,Bonne,Oui
+40,M.,Benoit,KUENEMANN,Président,ETS POLOP,14 AV GRAVE,30120,Le Vigan,10,,Entre 10 et 19 salariés,304179526,Bonne,Oui
+41,M.,Bruno,JACKY,Gérant,DEMENAGEMENTS ROLLET,33 RUE DU MOULIN,67160,Cleebourg,10,,Entre 10 et 19 salariés,309022291,Bonne,Oui
+42,M.,Hervé,FEUERSTEIN,Président,FEUERSTEIN,4 RUE SAINT-GEORGES,68480,Durmenach,10,,Entre 10 et 19 salariés,319242020,Bonne,Oui
+43,M.,Sébastien,COUFFIGNAL,Gérant,MELILA JARDIN,21 ROUTE DE SEVERAC,12850,Onet-le-Chateau,8,,Entre 10 et 19 salariés,478885072,Bonne,Non
+44,M.,Dino,GAIO,Gérant,SARL G.C. SERVICE FORESTIER,LD LE HAUT D'AGLET,72600,Saint-Longis,8,,Entre 10 et 19 salariés,481093524,À vérifier,Oui
+45,M.,Elias,EL-HELOU,Gérant,FIRST,67-68 CTR CCIAL DESTRELAND BOULEVARD DE DESTRELLAN,97122,Baie-Mahault,8,,Entre 10 et 19 salariés,411908700,Bonne,Non
+46,M.,Frédéric,MEGEVAND,Gérant,MEGEVAND FRERES,ZA LES MARAIS DE CULAS 41 ROUTE DU PUITS DE L'HOMME,74330,Sillingy,7,,Entre 20 et 49 salariés,382901791,À vérifier,Non
+47,M.,Philippe,FALAIZE-JUANE,Gérant,FIOUL 83,LOT 6  ZAC DE GAVARY 205 AV A L BREGUET,83260,La Crau,7,,Entre 20 et 49 salariés,389838087,À vérifier,Non
+48,M.,Hervé,BOTTAREL,Président,ETS BOTTAREL HERVE ET FILS,LA GRAOUADE,31800,Saint-Gaudens,6,,Entre 10 et 19 salariés,400071122,À vérifier,Non
+49,M.,Damien,CABRET,Directeur général délégué,BIO-CHAUDIERES,20 RUE DU GENERAL DE RASCAS,57220,Boulay-Moselle,6,,Entre 10 et 19 salariés,484696596,À vérifier,Non
