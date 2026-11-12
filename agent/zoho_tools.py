@@ -253,6 +253,9 @@ async def maj_prospect(
     telephone: str = "",
     portable: str = "",
     ville: str = "",
+    rue: str = "",
+    code_postal: str = "",
+    region: str = "",
     siren: str = "",
     type_investisseur: str = "",
     source_detaillee: str = "",
@@ -262,7 +265,8 @@ async def maj_prospect(
     (civilite : M./Mme/Mlle...), Status du Prospect (statut_prospect : donner le libellé
     affiché dans Zoho, ex. "A contacter dans le futur" — la valeur API valide est résolue
     automatiquement depuis les métadonnées du CRM), email, telephone (ligne fixe → champ
-    Téléphone), portable (smartphone → champ Portable, distinct du Téléphone), ville,
+    Téléphone), portable (smartphone → champ Portable, distinct du Téléphone), ville, rue
+    (Street), code_postal (Zip_Code), region (State),
     SIREN de la société liée (siren, à obtenir via chercher_siren si absent du listing),
     type d'investisseur, source détaillée. Le champ Téléphone E164 est recalculé depuis
     le portable si fourni, sinon le téléphone. note : texte ajouté en fin de Description
@@ -303,6 +307,15 @@ async def maj_prospect(
         if ville:
             champs["City"] = ville
             modifies.append("Ville")
+        if rue:
+            champs["Street"] = rue
+            modifies.append("Rue")
+        if code_postal:
+            champs["Zip_Code"] = code_postal
+            modifies.append("Code postal")
+        if region:
+            champs["State"] = region
+            modifies.append("Région")
         if siren:
             siren = re.sub(r"\D", "", siren)
             if len(siren) == 9:
@@ -349,6 +362,9 @@ async def creer_prospect(
     telephone: str = "",
     portable: str = "",
     ville: str = "",
+    rue: str = "",
+    code_postal: str = "",
+    region: str = "",
     siren_lie: str = "",
     type_investisseur: str = "Personne Physique",
     source_detaillee: str = "Listing",
@@ -363,7 +379,8 @@ async def creer_prospect(
     Portable) ; le champ Téléphone E164 vaut le portable si fourni, sinon le fixe.
     À appeler uniquement si verifier_doublons renvoie aucun_match. Si la société est
     connue mais le SIREN absent du listing, obtenir le SIREN via chercher_siren.
-    Renvoie les ids créés en JSON."""
+    Adresse : ville (City), rue (Street), code_postal (Zip_Code),
+    region (State, ex. Nouvelle-Aquitaine). Renvoie les ids créés en JSON."""
     tel = _norm_phone(portable or telephone)
     async with httpx.AsyncClient(timeout=60) as client:
         salut, _ = await _resolve(client, civilite, "Leads", "Salutation", LEADS_LAYOUT_ID)
@@ -382,6 +399,9 @@ async def creer_prospect(
                 "Phone": telephone or None,
                 "Mobile": portable or None,
                 "City": ville or None,
+                "Street": rue or None,
+                "Zip_Code": code_postal or None,
+                "State": region or None,
                 "Nom_normalis": _norm((prenom or "") + nom),
                 "T_l_phone_E164": tel or None,
                 "SIREN": (re.sub(r"\D", "", siren_lie) or None) if siren_lie else None,
