@@ -15,15 +15,23 @@ ZOHO_CRM = "https://www.zohoapis.eu/crm/v8"
 async def fetch_module_meta(module: str) -> dict:
     """Liste champs (api_name, label, type, picklist) et dispositions du module Zoho."""
     params = {
-        "refresh_token": os.environ["ZOHO_REFRESH_TOKEN"],
-        "client_id": os.environ["ZOHO_CLIENT_ID"],
-        "client_secret": os.environ["ZOHO_CLIENT_SECRET"],
+        "refresh_token": os.environ.get("ZOHO_REFRESH_TOKEN", ""),
+        "client_id": os.environ.get("ZOHO_CLIENT_ID", ""),
+        "client_secret": os.environ.get("ZOHO_CLIENT_SECRET", ""),
         "grant_type": "refresh_token",
     }
     async with httpx.AsyncClient(timeout=60) as client:
         t = await client.post(ZOHO_ACCOUNTS, params=params)
-        t.raise_for_status()
-        headers = {"Authorization": "Zoho-oauthtoken " + t.json()["access_token"]}
+        body = t.json()
+        if "access_token" not in body:
+            raise ValueError(
+                "Echange refresh token Zoho refuse : "
+                f"HTTP {t.status_code} / {body} / "
+                f"secrets presents : RT={bool(params['refresh_token'])}, "
+                f"CID={bool(params['client_id'])}, "
+                f"CS={bool(params['client_secret'])}"
+            )
+        headers = {"Authorization": "Zoho-oauthtoken " + body["access_token"]}
 
         rf = await client.get(
             f"{ZOHO_CRM}/settings/fields", params={"module": module}, headers=headers
