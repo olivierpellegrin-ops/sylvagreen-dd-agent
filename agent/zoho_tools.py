@@ -4,7 +4,7 @@ import json
 import os
 import re
 import unicodedata
-from datetime import datetime, timedelta
+from datetime import datetime
 
 import httpx
 
@@ -356,8 +356,9 @@ async def creer_prospect(
 ) -> str:
     """Crée le prospect investisseur dans Zoho : lead (disposition Investisseurs) avec les
     champs de dédoublonnage (Nom_normalis, T_l_phone_E164, SIREN), la Civilité (Salutation :
-    M., Mme, Mlle... résolue automatiquement en valeur API valide du CRM), puis conversion
-    avec affaire au stade Qualification dans le Pipeline Investisseurs. Distinction
+    M., Mme, Mlle... résolue automatiquement en valeur API valide du CRM). AUCUNE
+    conversion : la fiche reste dans le module Prospects, la conversion en
+    Contact/Compte est une décision manuelle d'Olivier dans Zoho. Distinction
     téléphonique : telephone = ligne fixe (champ Téléphone), portable = smartphone (champ
     Portable) ; le champ Téléphone E164 vaut le portable si fourni, sinon le fixe.
     À appeler uniquement si verifier_doublons renvoie aucun_match. Si la société est
@@ -369,181 +370,27 @@ async def creer_prospect(
         salut = salut or _salutation(civilite)
         type_api, _ = await _resolve(client, type_investisseur, "Leads", "Type_d_investisseur", LEADS_LAYOUT_ID)
         source_api, _ = await _resolve(client, source_detaillee, "Leads", "Source_d_taill_e", LEADS_LAYOUT_ID)
-    payload = {
-        "data": [
-            {
-                "Layout": {"id": LEADS_LAYOUT_ID},
-                "Last_Name": nom,
-                "First_Name": prenom or "",
-                "Salutation": salut or None,
-                "Company": societe or (f"{prenom} {nom}"),
-                "Email": email or None,
-                "Phone": telephone or None,
-                "Mobile": portable or None,
-                "City": ville or None,
-                "Nom_normalis": _norm((prenom or "") + nom),
-                "T_l_phone_E164": tel or None,
-                "SIREN": (re.sub(r"\D", "", siren_lie) or None) if siren_lie else None,
-                "Type_d_investisseur": type_api or type_investisseur,
-                "Source_d_taill_e": source_api or source_detaillee,
-                "Description": f"[{datetime.now():%d/%m/%Y}] Agent : création prospect (source : {source_detaillee})",
-            }
-        ],
-        "duplicate_check_fields": ["Nom_normalis", "T_l_phone_E164"],
-        "trigger": ["workflow"],
-    }
-    for k in list(payload["data"][0]):
-        if payload["data"][0][k] is None:
-            del payload["data"][0][k]
-    async with httpx.AsyncClient(timeout=60) as client:
-        r = await client.post(f"{ZOHO_CRM}/Leads", json=payload, headers=await _h())
-        if r.status_code >= 400:
-            # repli : payload minimal si un champ optionnel est refusé
-            minimal = {"data": [{"Layout": {"id": LEADS_LAYOUT_ID}, "Last_Name": nom, "First_Name": prenom or None, "Company": societe or f"{prenom} {nom}", "Nom_normalis": _norm((prenom or "") + nom)}]}
-            for k in list(minimal["data"][0]):
-                if minimal["data"][0][k] is None:
-                    del minimal["data"][0][k]
-            r = await client.post(f"{ZOHO_CRM}/Leads", json=minimal, headers=await _h())
-        r.raise_for_status()
-        data = r.json()["data"][0]
-        if data.get("status") != "success":
-            return json.dumps({"erreur": data}, ensure_ascii=False)
-        lead_id = data["details"]["id"]
-
-        if tag_campagne:
-            await client.post(
-                f"{ZOHO_CRM}/Leads/{lead_id}/actions/add_tags",
-                json={"over_write": "false", "tags": [{"name": tag_campagne[:25]}]},
-                headers=await _h(),
-            )
-
-        # Conversion : crée Contact + Compte + Affaire (Pipeline Investisseurs, Qualification)
-        convert = {
-            "data": [
-                {
-                    "Deal": {
-                        "Deal_Name": f"Investissement — {prenom} {nom}".strip(),
-                        "Stage": "Qualification",
-                        "Pipeline": PIPELINE,
-                        "Layout": {"id": DEALS_LAYOUT_ID},
-                        "Closing_Date": (datetime.now() + timedelta(days=60)).strftime("%Y-%m-%d"),
-                    },
-                    "overwrite": True,
-                }
-            ]
-        }
-        rc = await client.post(f"{ZOHO_CRM}/Leads/{lead_id}/actions/convert", json=convert, headers=await _h())
-        conversion = rc.json() if rc.status_code < 500 else {"erreur": rc.text}
-
-        return json.dumps(
-            {"lead_id": lead_id, "conversion": conversion, "message": "Prospect créé — affaire au stade Qualification" if rc.status_code == 200 else "Prospect créé — conversion à vérifier manuellement"},
-            ensure_ascii=False,
-        )
-
-
-@agents.tool
-async def etiqueter(lead_ids: str, tag: str) -> str:
-    """Pose une balise (tag) Zoho sur un ou plusieurs leads existants : lead_ids = ids
-    séparés par des virgules, tag = nom de la balise (ex. "distributeurs", "en vrac").
-    La balise est créée automatiquement dans le module Leads si elle n'existe pas encore.
-    Renvoie JSON {tag, poses: [ids], erreurs}. Pour lister les fiches portant une ou
-    plusieurs balises, utiliser rechercher_par_tags."""
-    ids = [i.strip() for i in (lead_ids or "").split(",") if i.strip()]
-    tag = (tag or "").strip()
-    if not ids or not tag:
-        return json.dumps({"erreur": "lead_ids (ids séparés par des virgules) et tag requis"}, ensure_ascii=False)
-    poses: list = []
-    erreurs: list = []
-    async with httpx.AsyncClient(timeout=60) as client:
-        # s'assure que la balise existe (ignoré si déjà présente)
-        await client.post(
-            f"{ZOHO_CRM}/settings/tags",
-            params={"module": "Leads"},
-            json={"tags": [{"name": tag[:25]}]},
-            headers=await _h(),
-        )
-        for lid in ids:
-            r = await client.post(
-                f"{ZOHO_CRM}/Leads/{lid}/actions/add_tags",
-                json={"over_write": "false", "tags": [{"name": tag[:25]}]},
-                headers=await _h(),
-            )
-            if r.status_code in (200, 201):
-                poses.append(lid)
-            else:
-                erreurs.append({"lead_id": lid, "http": r.status_code, "corps": r.text[:150]})
-    return json.dumps({"tag": tag[:25], "nb_poses": len(poses), "poses": poses, "erreurs": erreurs}, ensure_ascii=False)
-
-
-@agents.tool(annotations=agents.ToolAnnotations(read_only_hint=True))
-async def rechercher_par_tags(tags: str, module: str = "Leads") -> str:
-    """Sélection multicritères par balises : renvoie les fiches du module (Leads par
-    défaut) qui portent TOUTES les balises indiquées, tags séparés par des virgules
-    (ex. "distributeurs,en vrac"). Une seule balise suffit aussi (liste des fiches de
-    cette balise). Renvoie pour chaque fiche : id, nom, société, ville, statut du
-    prospect, portable et téléphone. Lecture seule."""
-    liste = [t.strip() for t in (tags or "").split(",") if t.strip()]
-    if not liste:
-        return json.dumps({"erreur": "au moins une balise requise (séparées par des virgules)"}, ensure_ascii=False)
-    async with httpx.AsyncClient(timeout=60) as client:
-        ensembles = []
-        for t in liste:
-            r = await client.get(
-                f"{ZOHO_CRM}/{module}/search",
-                params={"criteria": f"(Tag:equals:{t[:25]})", "per_page": 200},
-                headers=await _h(),
-            )
-            if r.status_code == 204:
-                ensembles.append({})
-                continue
-            r.raise_for_status()
-            ensembles.append({x.get("id"): x for x in r.json().get("data", [])})
-        communs = set.intersection(*(set(e) for e in ensembles)) if len(ensembles) > 1 else set(ensembles[0])
-        fiches = [ensembles[0][i] for i in communs]
-    resultats = [
-        {
-            "id": f.get("id"),
-            "nom": f.get("Full_Name"),
-            "societe": f.get("Company"),
-            "ville": f.get("City"),
-            "statut": f.get("Lead_Status"),
-            "portable": f.get("Mobile"),
-            "telephone": f.get("Phone"),
-        }
-        for f in fiches
-    ]
-    return json.dumps({"tags": liste, "nb_fiches": len(resultats), "fiches": resultats}, ensure_ascii=False)
-
-
-@agents.tool
-async def planifier_relance(
-    sujet: str,
-    lead_id: str,
-    date_echeance: str,
-    heure_rappel: str = "08:30:00",
-    priorite: str = "Normal",
-) -> str:
-    """Crée une tâche de relance avec rappel liée au prospect (lead Zoho). date_echeance au
-    format AAAA-MM-JJ, heure_rappel au format hh:mm:ss (fuseau France appliqué automatiquement).
-    Cadences usuelles : J+7 sans réponse, J+7 après RDV, J+30 après signature."""
-    payload = {
-        "data": [
-            {
-                "Subject": sujet,
-                "$se_module": "Leads",
-                "What_Id": lead_id,
-                "Priority": priorite,
-                "Send_Reminder": True,
-                "Reminder": f"{date_echeance}T{heure_rappel}+01:00",
-                "Activity_Date": date_echeance,
-            }
-        ]
-    }
     async with httpx.AsyncClient(timeout=30) as client:
-        r = await client.post(f"{ZOHO_CRM}/Tasks", json=payload, headers=await _h())
-        r.raise_for_status()
+        # Un lead converti n'est plus adressable en écriture : la tâche échouerait.
+        rl = await client.get(f"{ZOHO_CRM}/Leads/{lead_id}", params={"fields": "id,Full_Name"}, headers=await _h())
+        if rl.status_code != 200:
+            return json.dumps({"erreur": f"lead_id introuvable dans le module Prospects : {lead_id} (fiche convertie en contact ?)", "http": rl.status_code}, ensure_ascii=False)
+
+        base = {
+            "Subject": sujet,
+            "Description": f"Relance prévue le {date_echeance}, rappel souhaité à {heure_rappel} (heure de Paris).",
+            "Status": "Not Started",
+            "$se_module": "Leads",
+            "What_Id": lead_id,
+        }
+        r = await client.post(f"{ZOHO_CRM}/Tasks", json={"data": [dict(base, Due_Date=date_echeance, Priority=priorite)]}, headers=await _h())
+        if r.status_code >= 400 and priorite:
+            # Priority est une picklist : si la valeur est refusée, on la retire.
+            r = await client.post(f"{ZOHO_CRM}/Tasks", json={"data": [dict(base, Due_Date=date_echeance)]}, headers=await _h())
+        if r.status_code >= 400:
+            return json.dumps({"erreur": r.text[:300], "http": r.status_code}, ensure_ascii=False)
         data = r.json()["data"][0]
-        return json.dumps({"tache": data.get("details", data)}, ensure_ascii=False)
+        return json.dumps({"tache": data.get("details", data), "rappel_souhaite": f"{date_echeance} {heure_rappel}"}, ensure_ascii=False)
 
 
 @agents.tool(annotations=agents.ToolAnnotations(read_only_hint=True))
