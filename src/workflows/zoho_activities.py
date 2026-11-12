@@ -63,7 +63,7 @@ async def fetch_module_meta(module: str, access_token: Optional[str] = None) -> 
     (settings/fields?layout_id=...) afin de detecter des valeurs renommees.
     Un echantillon d'enregistrements est inclus pour verifier les valeurs API reellement stockees.
     """
-    async with httpx.AsyncClient(timeout=60) as client:
+    async with httpx.AsyncClient(timeout=120) as client:
         if not access_token:
             params = {
                 "refresh_token": os.environ.get("ZOHO_REFRESH_TOKEN", ""),
@@ -83,6 +83,24 @@ async def fetch_module_meta(module: str, access_token: Optional[str] = None) -> 
                 )
             access_token = body["access_token"]
         headers = {"Authorization": "Zoho-oauthtoken " + access_token}
+
+        # Echantillon d'enregistrements en premier : valeurs API reellement stockees dans les fiches
+        echantillons = []
+        try:
+            rs = await client.get(
+                f"{ZOHO_CRM}/{module}",
+                params={"per_page": 5, "page": 1, "fields": "id,Full_Name,Lead_Status,Salutation"},
+                headers=headers,
+            )
+            if rs.status_code == 200:
+                for rec in rs.json().get("data", []):
+                    echantillons.append(
+                        {k: rec.get(k) for k in ("id", "Full_Name", "Lead_Status", "Salutation") if rec.get(k) is not None}
+                    )
+            else:
+                echantillons = [{"erreur_http": rs.status_code, "corps": rs.text[:300]}]
+        except Exception as e:
+            echantillons = [{"erreur": str(e)[:300]}]
 
         rf = await client.get(
             f"{ZOHO_CRM}/settings/fields", params={"module": module}, headers=headers
@@ -144,20 +162,6 @@ async def fetch_module_meta(module: str, access_token: Optional[str] = None) -> 
                 picklists_par_layout.append(
                     {"layout": l["nom"], "layout_id": l["id"], "champs_picklist": champs_layout}
                 )
-
-        # Echantillon d'enregistrements : valeurs API reellement stockees dans les fiches
-        echantillons = []
-        try:
-            rs = await client.get(
-                f"{ZOHO_CRM}/{module}", params={"per_page": 3, "page": 1}, headers=headers
-            )
-            if rs.status_code == 200:
-                for rec in rs.json().get("data", []):
-                    echantillons.append(
-                        {k: rec.get(k) for k in ("id", "Full_Name", "Lead_Status", "Salutation") if rec.get(k) is not None}
-                    )
-        except Exception:
-            pass
 
         return {
             "module": module,
