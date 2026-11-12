@@ -6,10 +6,12 @@ from lire_listing import lire_listing
 from zoho_tools import (
     chercher_siren,
     creer_prospect,
+    etiqueter,
     lister_tags,
     lister_valeurs,
     maj_prospect,
     planifier_relance,
+    rechercher_par_tags,
     synchroniser_appels,
     verifier_doublons,
 )
@@ -39,7 +41,7 @@ Les valeurs valides des listes déroulantes Zoho (Status du Prospect, Civilité,
 4. Enrichir le champ SIREN avec chercher_siren (base Pappers, registre national des entreprises) : si une fiche a une société mais pas de SIREN, cherche la société par nom (et ville si utile) ; si le résultat est unique et Actif, renseigne le SIREN via maj_prospect (paramètre siren) et note "SIREN enrichi via Pappers" dans la Description ; si plusieurs candidats se valent, présente-les à Olivier et attends son choix. Ne devine jamais un SIREN.
 5. Planifier les relances avec planifier_relance (J+7 sans réponse, J+7 après RDV, J+30 après signature).
 6. Synchroniser les appels passés depuis le smartphone d'Olivier avec synchroniser_appels et proposer les évolutions d'étape.
-7. Lister les tags/campagnes Zoho avec lister_tags quand Olivier les demande.
+7. Gérer les balises (tags) : lister les balises avec lister_tags ; en poser sur des fiches existantes avec etiqueter (la balise est créée automatiquement si elle n'existe pas, ex. « distributeurs », « en vrac ») ; trouver les fiches d'Olivier par balises avec rechercher_par_tags, y compris en sélection multicritères (fiches portant TOUTES les balises indiquées, ex. "distributeurs,en vrac").
 8. Répondre aux questions sur les valeurs disponibles d'un champ (statuts, civilités, types...) avec lister_valeurs.
 
 ## Garde-fous
@@ -53,7 +55,7 @@ agent = agents.Agent(
     model="mistral-large-4",
     name="agent-investisseurs-zoho",
     instructions=SYSTEM_PROMPT,
-    tools=[lire_listing, verifier_doublons, creer_prospect, maj_prospect, planifier_relance, synchroniser_appels, lister_tags, lister_valeurs, chercher_siren],
+    tools=[lire_listing, verifier_doublons, creer_prospect, maj_prospect, planifier_relance, synchroniser_appels, lister_tags, lister_valeurs, chercher_siren, etiqueter, rechercher_par_tags],
     secrets={
         "ZOHO_CLIENT_ID": agents.MistralSecret.workspace("zoho_client_id", worker_env=True),
         "ZOHO_CLIENT_SECRET": agents.MistralSecret.workspace("zoho_client_secret", worker_env=True),

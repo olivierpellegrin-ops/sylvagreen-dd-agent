@@ -442,6 +442,80 @@ async def creer_prospect(
 
 
 @agents.tool
+async def etiqueter(lead_ids: str, tag: str) -> str:
+    """Pose une balise (tag) Zoho sur un ou plusieurs leads existants : lead_ids = ids
+    séparés par des virgules, tag = nom de la balise (ex. "distributeurs", "en vrac").
+    La balise est créée automatiquement dans le module Leads si elle n'existe pas encore.
+    Renvoie JSON {tag, poses: [ids], erreurs}. Pour lister les fiches portant une ou
+    plusieurs balises, utiliser rechercher_par_tags."""
+    ids = [i.strip() for i in (lead_ids or "").split(",") if i.strip()]
+    tag = (tag or "").strip()
+    if not ids or not tag:
+        return json.dumps({"erreur": "lead_ids (ids séparés par des virgules) et tag requis"}, ensure_ascii=False)
+    poses: list = []
+    erreurs: list = []
+    async with httpx.AsyncClient(timeout=60) as client:
+        # s'assure que la balise existe (ignoré si déjà présente)
+        await client.post(
+            f"{ZOHO_CRM}/settings/tags",
+            params={"module": "Leads"},
+            json={"tags": [{"name": tag[:25]}]},
+            headers=await _h(),
+        )
+        for lid in ids:
+            r = await client.post(
+                f"{ZOHO_CRM}/Leads/{lid}/actions/add_tags",
+                json={"over_write": "false", "tags": [{"name": tag[:25]}]},
+                headers=await _h(),
+            )
+            if r.status_code in (200, 201):
+                poses.append(lid)
+            else:
+                erreurs.append({"lead_id": lid, "http": r.status_code, "corps": r.text[:150]})
+    return json.dumps({"tag": tag[:25], "nb_poses": len(poses), "poses": poses, "erreurs": erreurs}, ensure_ascii=False)
+
+
+@agents.tool(annotations=agents.ToolAnnotations(read_only_hint=True))
+async def rechercher_par_tags(tags: str, module: str = "Leads") -> str:
+    """Sélection multicritères par balises : renvoie les fiches du module (Leads par
+    défaut) qui portent TOUTES les balises indiquées, tags séparés par des virgules
+    (ex. "distributeurs,en vrac"). Une seule balise suffit aussi (liste des fiches de
+    cette balise). Renvoie pour chaque fiche : id, nom, société, ville, statut du
+    prospect, portable et téléphone. Lecture seule."""
+    liste = [t.strip() for t in (tags or "").split(",") if t.strip()]
+    if not liste:
+        return json.dumps({"erreur": "au moins une balise requise (séparées par des virgules)"}, ensure_ascii=False)
+    async with httpx.AsyncClient(timeout=60) as client:
+        ensembles = []
+        for t in liste:
+            r = await client.get(
+                f"{ZOHO_CRM}/{module}/search",
+                params={"criteria": f"(Tag:equals:{t[:25]})", "per_page": 200},
+                headers=await _h(),
+            )
+            if r.status_code == 204:
+                ensembles.append({})
+                continue
+            r.raise_for_status()
+            ensembles.append({x.get("id"): x for x in r.json().get("data", [])})
+        communs = set.intersection(*(set(e) for e in ensembles)) if len(ensembles) > 1 else set(ensembles[0])
+        fiches = [ensembles[0][i] for i in communs]
+    resultats = [
+        {
+            "id": f.get("id"),
+            "nom": f.get("Full_Name"),
+            "societe": f.get("Company"),
+            "ville": f.get("City"),
+            "statut": f.get("Lead_Status"),
+            "portable": f.get("Mobile"),
+            "telephone": f.get("Phone"),
+        }
+        for f in fiches
+    ]
+    return json.dumps({"tags": liste, "nb_fiches": len(resultats), "fiches": resultats}, ensure_ascii=False)
+
+
+@agents.tool
 async def planifier_relance(
     sujet: str,
     lead_id: str,
@@ -514,8 +588,8 @@ async def synchroniser_appels(nb_jours: int = 7) -> str:
 
 @agents.tool(annotations=agents.ToolAnnotations(read_only_hint=True))
 async def lister_tags(module: str = "Leads") -> str:
-    """Liste les tags (étiquettes de campagne) d'un module Zoho (Leads par défaut) :
-    nom de chaque tag et nombre de fiches associées. Lecture seule."""
+    """Liste les balises (tags) d'un module Zoho (Leads par défaut) : nom de chaque
+    balise et nombre de fiches associées. Lecture seule."""
     async with httpx.AsyncClient(timeout=30) as client:
         r = await client.get(f"{ZOHO_CRM}/settings/tags", params={"module": module}, headers=await _h())
         r.raise_for_status()
