@@ -112,10 +112,26 @@ async def verifier_doublons(
     return json.dumps({"verdict": "aucun_match", "nom_normalise": nom_norm, "tel_e164": tel}, ensure_ascii=False)
 
 
+_SALUTATIONS = {
+    "m": "Mr.", "m.": "Mr.", "mr": "Mr.", "mr.": "Mr.", "monsieur": "Mr.",
+    "mme": "Mrs.", "mme.": "Mrs.", "mrs": "Mrs.", "mrs.": "Mrs.", "madame": "Mrs.",
+    "mlle": "Ms.", "mlle.": "Ms.", "ms": "Ms.", "ms.": "Ms.", "mademoiselle": "Ms.",
+    "dr": "Dr.", "dr.": "Dr.", "docteur": "Dr.",
+    "pr": "Prof.", "prof.": "Prof.", "professeur": "Prof.",
+}
+
+
+def _salutation(civilite: str) -> str:
+    """Convertit une civilité française (M., Mme, Mlle...) en valeur API du picklist
+    Salutation de Zoho (Mr., Mrs., Ms., Dr., Prof.). Vide si inconnue."""
+    return _SALUTATIONS.get((civilite or "").strip().lower(), "")
+
+
 @agents.tool
 async def creer_prospect(
     nom: str,
     prenom: str = "",
+    civilite: str = "",
     societe: str = "",
     email: str = "",
     telephone: str = "",
@@ -126,9 +142,10 @@ async def creer_prospect(
     tag_campagne: str = "",
 ) -> str:
     """Crée le prospect investisseur dans Zoho : lead (disposition Investisseurs) avec les
-    champs de dédoublonnage (Nom_normalis, T_l_phone_E164, SIREN), puis conversion avec
-    affaire au stade Qualification dans le Pipeline Investisseurs. À appeler uniquement si
-    verifier_doublons renvoie aucun_match. Renvoie les ids créés en JSON."""
+    champs de dédoublonnage (Nom_normalis, T_l_phone_E164, SIREN), la Civilité (Salutation :
+    M., Mme, Mlle... convertie automatiquement en valeur API Zoho Mr./Mrs./Ms.), puis
+    conversion avec affaire au stade Qualification dans le Pipeline Investisseurs.
+    À appeler uniquement si verifier_doublons renvoie aucun_match. Renvoie les ids créés en JSON."""
     tel = _norm_phone(telephone)
     payload = {
         "data": [
@@ -136,6 +153,7 @@ async def creer_prospect(
                 "Layout": {"id": LEADS_LAYOUT_ID},
                 "Last_Name": nom,
                 "First_Name": prenom or "",
+                "Salutation": _salutation(civilite) or None,
                 "Company": societe or (f"{prenom} {nom}"),
                 "Email": email or None,
                 "Phone": telephone or None,
