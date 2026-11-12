@@ -2,6 +2,7 @@
 
 Entrees : SIREN de la societe + source du HTML (fichier du repo agent/data/etudes/...
 ou URL signee). Le PDF remplace une piece jointe homonyme (rejouable sans doublon).
+Tout le traitement binaire reste dans une seule activite.
 """
 
 from __future__ import annotations
@@ -13,14 +14,7 @@ from mistralai.workflows import workflow
 from pydantic import BaseModel
 
 with workflow.unsafe.imports_passed_through():
-    from .etude_activities import (
-        ajouter_note,
-        attacher_pdf,
-        chercher_fiche,
-        html_vers_pdf,
-        obtenir_html,
-        refresh_access_token,
-    )
+    from .etude_activities import traiter_etude
 
 
 class EtudeZohoInput(BaseModel):
@@ -46,22 +40,12 @@ class EtudeZohoInput(BaseModel):
 class EtudeZohoWorkflow:
     @workflows.workflow.entrypoint
     async def run(self, input: EtudeZohoInput) -> dict:
-        source = await obtenir_html(chemin=input.chemin, url=input.url)
-        base = source["source"].split("/")[-1].replace(".html", "")
-        nom_pdf = input.nom_pdf or (base + ".pdf")
-        conv = await html_vers_pdf(source["html"], nom_pdf)
-        token = await refresh_access_token()
-        fiche = await chercher_fiche(token, input.siren, module=input.module)
-        att = await attacher_pdf(token, fiche["module"], fiche["id"], conv["pdf"], conv["nom_pdf"])
-        note_statut = None
-        if input.ajouter_note:
-            note = input.texte_note or (
-                "Etude de capacite d'investissement SylvaGreen Conseils (PDF joint) - 2026-11-12."
-            )
-            note_statut = await ajouter_note(token, fiche["module"], fiche["id"], note)
-        return {
-            "fiche": fiche,
-            "pdf": {"nom": conv["nom_pdf"], "pages": conv["pages"], "taille_octets": conv["taille_octets"]},
-            "attachment_id": att["attachment_id"],
-            "note": note_statut,
-        }
+        return await traiter_etude(
+            siren=input.siren,
+            chemin=input.chemin,
+            url=input.url,
+            nom_pdf=input.nom_pdf,
+            module=input.module,
+            ajouter_note=input.ajouter_note,
+            texte_note=input.texte_note,
+        )
