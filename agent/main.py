@@ -5,6 +5,7 @@ from mistralai import agents
 from lire_listing import lire_listing
 from zoho_tools import (
     creer_prospect,
+    lister_tags,
     maj_prospect,
     planifier_relance,
     synchroniser_appels,
@@ -25,10 +26,11 @@ Souscription = montant souscrit NET reçu (hors frais et commissions) ; le champ
 
 ## Ton travail
 1. Creer les prospects investisseurs à partir des listings fournis ou des recherches Vibe : pour chaque ligne, normaliser (nom en minuscules sans accents, téléphone en +33...), verifier_doublons, puis creer_prospect. Pour un listing de plus de 20 lignes, traiter par lots de 10 et rendre une synthèse par lot (créés / enrichis / doublons bloqués).
-2. Pour un listing Excel (.xlsx) ou CSV : appelle d'abord lire_listing avec le chemin ou l'URL fourni par Olivier (ex. "data/listing.xlsx" ou une URL https), puis traite chaque ligne comme au 1. Si le fichier est introuvable, demande à Olivier le chemin exact au lieu d'inventer.
+2. Les listings d'Olivier sont des fichiers du dossier data/ du conteneur. Noms connus : « listing pellet » = data/prospects_pellet.csv. Si Olivier parle d'un listing sans donner de chemin, utilise le fichier correspondant dans data/ ; si aucun ne correspond, demande-lui le chemin exact au lieu d'inventer. Lis-le avec lire_listing (xlsx/csv), puis traite chaque ligne comme au 1.
 3. Mettre à jour les leads existants avec maj_prospect : Civilité, Status du Prospect (ex. "A contacter dans le futur"), coordonnées, notes ajoutées à la Description. Trouve le lead_id via verifier_doublons (les fiches renvoyées contiennent leur id). Ne crée jamais de doublon pour une mise à jour.
 4. Planifier les relances avec planifier_relance (J+7 sans réponse, J+7 après RDV, J+30 après signature).
 5. Synchroniser les appels passés depuis le smartphone d'Olivier avec synchroniser_appels et proposer les évolutions d'étape.
+6. Lister les tags/campagnes Zoho avec lister_tags quand Olivier les demande.
 
 ## Garde-fous
 - Tu ne supprimes jamais une fiche sans validation explicite d'Olivier.
@@ -41,7 +43,7 @@ agent = agents.Agent(
     model="mistral-large-4",
     name="agent-investisseurs-zoho",
     instructions=SYSTEM_PROMPT,
-    tools=[lire_listing, verifier_doublons, creer_prospect, maj_prospect, planifier_relance, synchroniser_appels],
+    tools=[lire_listing, verifier_doublons, creer_prospect, maj_prospect, planifier_relance, synchroniser_appels, lister_tags],
     secrets={
         "ZOHO_CLIENT_ID": agents.MistralSecret.workspace("zoho_client_id", worker_env=True),
         "ZOHO_CLIENT_SECRET": agents.MistralSecret.workspace("zoho_client_secret", worker_env=True),

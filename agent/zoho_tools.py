@@ -367,3 +367,14 @@ async def synchroniser_appels(nb_jours: int = 7) -> str:
             }
         )
     return json.dumps({"nb_appels": len(resultats), "appels": resultats[:50]}, ensure_ascii=False)
+
+
+@agents.tool(annotations=agents.ToolAnnotations(read_only_hint=True))
+async def lister_tags(module: str = "Leads") -> str:
+    """Liste les tags (étiquettes de campagne) d'un module Zoho (Leads par défaut) :
+    nom de chaque tag et nombre de fiches associées. Lecture seule."""
+    async with httpx.AsyncClient(timeout=30) as client:
+        r = await client.get(f"{ZOHO_CRM}/settings/tags", params={"module": module}, headers=await _h())
+        r.raise_for_status()
+        tags = r.json().get("tags", [])
+        return json.dumps({"module": module, "tags": [{"name": t.get("name"), "nb_fiches": t.get("count")} for t in tags]}, ensure_ascii=False)
