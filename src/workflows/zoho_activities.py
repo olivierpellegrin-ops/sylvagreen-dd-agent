@@ -1,6 +1,7 @@
 """Activites Zoho — I/O isolees hors du sandbox du workflow."""
 
 import os
+from typing import Optional
 
 import httpx
 
@@ -12,26 +13,55 @@ ZOHO_CRM = "https://www.zohoapis.eu/crm/v8"
 
 
 @workflows.activity()
-async def fetch_module_meta(module: str) -> dict:
-    """Liste champs (api_name, label, type, picklist) et dispositions du module Zoho."""
+async def exchange_code(code: str, client_id: str, client_secret: str) -> dict:
+    """Echange un code d'autorisation contre access_token + refresh_token (code a usage unique)."""
     params = {
-        "refresh_token": os.environ.get("ZOHO_REFRESH_TOKEN", ""),
-        "client_id": os.environ.get("ZOHO_CLIENT_ID", ""),
-        "client_secret": os.environ.get("ZOHO_CLIENT_SECRET", ""),
-        "grant_type": "refresh_token",
+        "code": code,
+        "client_id": client_id,
+        "client_secret": client_secret,
+        "grant_type": "authorization_code",
     }
-    async with httpx.AsyncClient(timeout=60) as client:
+    async with httpx.AsyncClient(timeout=30) as client:
         t = await client.post(ZOHO_ACCOUNTS, params=params)
         body = t.json()
-        if "access_token" not in body:
+        if "access_token" not in body or "refresh_token" not in body:
             raise ValueError(
-                "Echange refresh token Zoho refuse : "
-                f"HTTP {t.status_code} / {body} / "
-                f"secrets presents : RT={bool(params['refresh_token'])}, "
-                f"CID={bool(params['client_id'])}, "
-                f"CS={bool(params['client_secret'])}"
+                f"Echange code Zoho refuse : HTTP {t.status_code} / {body}"
             )
-        headers = {"Authorization": "Zoho-oauthtoken " + body["access_token"]}
+        return {
+            "access_token": body["access_token"],
+            "refresh_token": body["refresh_token"],
+            "api_domain": body.get("api_domain"),
+        }
+
+
+@workflows.activity()
+async def fetch_module_meta(module: str, access_token: Optional[str] = None) -> dict:
+    """Liste champs (api_name, label, type, picklist) et dispositions du module Zoho.
+
+    Si access_token est fourni, il est utilise tel quel (suite a un echange de code).
+    Sinon, refresh token via les secrets d'environnement.
+    """
+    async with httpx.AsyncClient(timeout=60) as client:
+        if not access_token:
+            params = {
+                "refresh_token": os.environ.get("ZOHO_REFRESH_TOKEN", ""),
+                "client_id": os.environ.get("ZOHO_CLIENT_ID", ""),
+                "client_secret": os.environ.get("ZOHO_CLIENT_SECRET", ""),
+                "grant_type": "refresh_token",
+            }
+            t = await client.post(ZOHO_ACCOUNTS, params=params)
+            body = t.json()
+            if "access_token" not in body:
+                raise ValueError(
+                    "Echange refresh token Zoho refuse : "
+                    f"HTTP {t.status_code} / {body} / "
+                    f"secrets presents : RT={bool(params['refresh_token'])}, "
+                    f"CID={bool(params['client_id'])}, "
+                    f"CS={bool(params['client_secret'])}"
+                )
+            access_token = body["access_token"]
+        headers = {"Authorization": "Zoho-oauthtoken " + access_token}
 
         rf = await client.get(
             f"{ZOHO_CRM}/settings/fields", params={"module": module}, headers=headers
