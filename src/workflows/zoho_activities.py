@@ -35,12 +35,32 @@ async def exchange_code(code: str, client_id: str, client_secret: str) -> dict:
         }
 
 
+def _picklists_des_champs(fields: list) -> list:
+    """Extrait les picklists (valeur_api / libelle) d'une liste de champs settings/fields."""
+    resultat = []
+    for f in fields:
+        if f.get("pick_list_values"):
+            resultat.append(
+                {
+                    "api_name": f.get("api_name"),
+                    "label": f.get("field_label"),
+                    "picklist": [
+                        {"valeur_api": v.get("actual_value"), "libelle": v.get("display_value")}
+                        for v in f["pick_list_values"]
+                    ],
+                }
+            )
+    return resultat
+
+
 @workflows.activity()
 async def fetch_module_meta(module: str, access_token: Optional[str] = None) -> dict:
     """Liste champs (api_name, label, type, picklist) et dispositions du module Zoho.
 
     Si access_token est fourni, il est utilise tel quel (suite a un echange de code).
     Sinon, refresh token via les secrets d'environnement.
+    Pour chaque disposition, les picklists specifiques sont aussi lues
+    (settings/fields?layout_id=...) afin de detecter des valeurs renommees.
     """
     async with httpx.AsyncClient(timeout=60) as client:
         if not access_token:
@@ -107,4 +127,26 @@ async def fetch_module_meta(module: str, access_token: Optional[str] = None) -> 
                 }
                 for l in rl.json().get("layouts", [])
             ]
-        return {"module": module, "fields": fields, "layouts": layouts}
+
+        # Picklists specifiques a chaque disposition (valeurs potentiellement renommees)
+        picklists_par_layout = []
+        for l in layouts:
+            rlf = await client.get(
+                f"{ZOHO_CRM}/settings/fields",
+                params={"module": module, "layout_id": l["id"]},
+                headers=headers,
+            )
+            if rlf.status_code != 200:
+                continue
+            champs_layout = _picklists_des_champs(rlf.json().get("fields", []))
+            if champs_layout:
+                picklists_par_layout.append(
+                    {"layout": l["nom"], "layout_id": l["id"], "champs_picklist": champs_layout}
+                )
+
+        return {
+            "module": module,
+            "fields": fields,
+            "layouts": layouts,
+            "picklists_par_layout": picklists_par_layout,
+        }

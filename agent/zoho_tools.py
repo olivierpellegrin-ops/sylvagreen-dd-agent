@@ -17,6 +17,7 @@ DEALS_LAYOUT_ID = "968010000002223015"  # disposition « Investisseurs » (Deals
 PIPELINE = "Pipeline Investisseurs"
 
 _access_token = None
+_picklist_cache: dict = {}
 
 
 def _norm(s: str) -> str:
@@ -70,6 +71,64 @@ async def _search(module: str, criteria: str) -> list:
         return r.json().get("data", [])
 
 
+async def _picklist(client, module: str, champ_api: str, layout_id: str = "") -> list:
+    """Renvoie [(valeur_api, libelle_affiche)] du champ picklist, lus dans les métadonnées
+    de l'organisation (endpoint settings/fields), en priorité pour la disposition donnée.
+    Aucune valeur n'est codée en dur : source de vérité = le CRM lui-même."""
+    cle = (module, champ_api, layout_id)
+    if cle in _picklist_cache:
+        return _picklist_cache[cle]
+    params = {"module": module}
+    if layout_id:
+        params["layout_id"] = layout_id
+    r = await client.get(f"{ZOHO_CRM}/settings/fields", params=params, headers=await _h())
+    valeurs: list = []
+    if r.status_code == 200:
+        for f in r.json().get("fields", []):
+            if f.get("api_name") == champ_api:
+                valeurs = [
+                    (v.get("actual_value"), v.get("display_value"))
+                    for v in (f.get("pick_list_values") or [])
+                ]
+                break
+    if layout_id and not valeurs:
+        # disposition sans valeurs spécifiques ou paramètre refusé : repli module entier
+        return await _picklist(client, module, champ_api, "")
+    if valeurs:
+        _picklist_cache[cle] = valeurs
+    return valeurs
+
+
+async def _resolve(client, saisie: str, module: str, champ_api: str, layout_id: str = ""):
+    """Traduit une saisie utilisateur (libellé français affiché OU valeur API) en valeur
+    API valide du picklist, en comparant aux métadonnées réelles du CRM (normalisation
+    accents/casse/ponctuation). Renvoie (valeur_api ou None, valeurs_valides)."""
+    valeurs = await _picklist(client, module, champ_api, layout_id)
+    n = _norm(saisie)
+    if n:
+        for actual, libelle in valeurs:
+            if n in (_norm(actual), _norm(libelle)):
+                return actual, valeurs
+    return None, valeurs
+
+
+@agents.tool(annotations=agents.ToolAnnotations(read_only_hint=True))
+async def lister_valeurs(module: str = "Leads", champ: str = "Lead_Status", disposition_investisseurs: bool = True) -> str:
+    """Liste les valeurs valides d'un champ liste déroulante Zoho (ex. champ Lead_Status
+    du module Leads, Salutation, Type_d_investisseur...), pour la disposition
+    Investisseurs (par défaut) ou la disposition standard du module. Renvoie pour chaque
+    valeur son libellé affiché dans Zoho et sa valeur API. À utiliser avant maj_prospect
+    en cas de doute ou d'erreur sur un statut ou une civilité, et pour répondre aux
+    questions d'Olivier sur les valeurs disponibles. Lecture seule."""
+    layout = LEADS_LAYOUT_ID if (disposition_investisseurs and module == "Leads") else ""
+    async with httpx.AsyncClient(timeout=60) as client:
+        valeurs = await _picklist(client, module, champ, layout)
+    return json.dumps(
+        {"module": module, "champ": champ, "valeurs": [{"libelle": d, "valeur_api": a} for a, d in valeurs]},
+        ensure_ascii=False,
+    )
+
+
 @agents.tool(annotations=agents.ToolAnnotations(read_only_hint=True))
 async def verifier_doublons(
     nom: str,
@@ -120,10 +179,23 @@ _SALUTATIONS = {
     "pr": "Prof.", "prof.": "Prof.", "professeur": "Prof.",
 }
 
+# Repli de secours si les métadonnées du CRM sont inaccessibles.
+_STATUTS_SECOURS = {
+    "acontacterdanslefutur": "Contact in Future", "contactinfuture": "Contact in Future",
+    "tentativedecontact": "Attempted to Contact", "attemptedtocontact": "Attempted to Contact",
+    "contacte": "Contacted", "contacted": "Contacted",
+    "noncontacte": "Not Contacted", "notcontacted": "Not Contacted",
+    "prequalifie": "Pre-Qualified", "prequalified": "Pre-Qualified",
+    "nonqualifie": "Not Qualified", "notqualified": "Not Qualified",
+    "prospectindesirable": "Junk Lead", "junklead": "Junk Lead", "indesirable": "Junk Lead",
+    "prospectperdu": "Lost Lead", "lostlead": "Lost Lead", "perdu": "Lost Lead",
+}
+
 
 def _salutation(civilite: str) -> str:
     """Convertit une civilité française (M., Mme, Mlle...) en valeur API du picklist
-    Salutation de Zoho (Mr., Mrs., Ms., Dr., Prof.). Vide si inconnue."""
+    Salutation de Zoho (Mr., Mrs., Ms., Dr., Prof.). Vide si inconnue. Uniquement
+    utilisé comme repli : la résolution normale passe par les métadonnées du CRM."""
     return _SALUTATIONS.get((civilite or "").strip().lower(), "")
 
 
@@ -141,33 +213,30 @@ async def maj_prospect(
 ) -> str:
     """Met à jour un lead Zoho EXISTANT (ne crée jamais de fiche). Identifie la fiche par
     son lead_id. Champs modifiables (seuls ceux fournis sont changés) : Civilité
-    (civilite : M./Mme/Mlle convertie en valeur Zoho), Status du Prospect (statut_prospect :
-    "A contacter dans le futur", "Tentative de contact", "Contacté", "Non contacté",
-    "Préqualifié", "Non qualifié", "Prospect indésirable", "Prospect perdu" — convertis
-    en valeurs API), email, telephone, ville, type d'investisseur, source détaillée.
-    note : texte ajouté en fin de Description au format [JJ/MM/AAAA] Agent : note.
-    Renvoie JSON {lead_id, modifie: [champs]}."""
-    mapping_statut = {
-        "acontacterdanslefutur": "Contact in Future", "contactinfuture": "Contact in Future",
-        "tentativedecontact": "Attempted to Contact", "attemptedtocontact": "Attempted to Contact",
-        "contacte": "Contacted", "contacted": "Contacted",
-        "noncontacte": "Not Contacted", "notcontacted": "Not Contacted",
-        "prequalifie": "Pre-Qualified", "prequalified": "Pre-Qualified",
-        "nonqualifie": "Not Qualified", "notqualified": "Not Qualified",
-        "prospectindesirable": "Junk Lead", "junklead": "Junk Lead", "indesirable": "Junk Lead",
-        "prospectperdu": "Lost Lead", "lostlead": "Lost Lead", "perdu": "Lost Lead",
-    }
+    (civilite : M./Mme/Mlle...), Status du Prospect (statut_prospect : donner le libellé
+    affiché dans Zoho, ex. "A contacter dans le futur" — la valeur API valide est résolue
+    automatiquement depuis les métadonnées du CRM), email, telephone, ville, type
+    d'investisseur, source détaillée. note : texte ajouté en fin de Description au format
+    [JJ/MM/AAAA] Agent : note. Renvoie JSON {lead_id, modifie: [champs]}."""
     async with httpx.AsyncClient(timeout=60) as client:
         champs: dict = {"id": lead_id}
         modifies = []
-        salut = _salutation(civilite)
-        if salut:
-            champs["Salutation"] = salut
-            modifies.append("Civilité")
+        if civilite:
+            salut, _ = await _resolve(client, civilite, "Leads", "Salutation", LEADS_LAYOUT_ID)
+            salut = salut or _salutation(civilite)
+            if salut:
+                champs["Salutation"] = salut
+                modifies.append("Civilité")
         if statut_prospect:
-            api = mapping_statut.get(_norm(statut_prospect), statut_prospect if statut_prospect in mapping_statut.values() else "")
+            api, valeurs = await _resolve(client, statut_prospect, "Leads", "Lead_Status", LEADS_LAYOUT_ID)
             if not api:
-                return json.dumps({"erreur": f"Status inconnu : {statut_prospect}. Valeurs acceptées : {sorted(set(mapping_statut.values()))}"}, ensure_ascii=False)
+                api = _STATUTS_SECOURS.get(_norm(statut_prospect), "")
+            if not api:
+                libelles = "; ".join(f"{lib} (= {act})" for act, lib in valeurs) or "interroger lister_valeurs"
+                return json.dumps(
+                    {"erreur": f"Statut inconnu : {statut_prospect}. Valeurs acceptées : {libelles}"},
+                    ensure_ascii=False,
+                )
             champs["Lead_Status"] = api
             modifies.append("Status du Prospect")
         if email:
@@ -181,10 +250,18 @@ async def maj_prospect(
             champs["City"] = ville
             modifies.append("Ville")
         if type_investisseur:
-            champs["Type_d_investisseur"] = type_investisseur
+            api, valeurs = await _resolve(client, type_investisseur, "Leads", "Type_d_investisseur", LEADS_LAYOUT_ID)
+            if api:
+                champs["Type_d_investisseur"] = api
+            elif valeurs:
+                libelles = "; ".join(f"{lib} (= {act})" for act, lib in valeurs)
+                return json.dumps({"erreur": f"Type d'investisseur inconnu : {type_investisseur}. Valeurs acceptées : {libelles}"}, ensure_ascii=False)
+            else:
+                champs["Type_d_investisseur"] = type_investisseur
             modifies.append("Type d'investisseur")
         if source_detaillee:
-            champs["Source_d_taill_e"] = source_detaillee
+            api, _ = await _resolve(client, source_detaillee, "Leads", "Source_d_taill_e", LEADS_LAYOUT_ID)
+            champs["Source_d_taill_e"] = api or source_detaillee
             modifies.append("Source détaillée")
         if note:
             r = await client.get(f"{ZOHO_CRM}/Leads/{lead_id}", params={"fields": "Description"}, headers=await _h())
@@ -217,17 +294,22 @@ async def creer_prospect(
 ) -> str:
     """Crée le prospect investisseur dans Zoho : lead (disposition Investisseurs) avec les
     champs de dédoublonnage (Nom_normalis, T_l_phone_E164, SIREN), la Civilité (Salutation :
-    M., Mme, Mlle... convertie automatiquement en valeur API Zoho Mr./Mrs./Ms.), puis
+    M., Mme, Mlle... résolue automatiquement en valeur API valide du CRM), puis
     conversion avec affaire au stade Qualification dans le Pipeline Investisseurs.
     À appeler uniquement si verifier_doublons renvoie aucun_match. Renvoie les ids créés en JSON."""
     tel = _norm_phone(telephone)
+    async with httpx.AsyncClient(timeout=60) as client:
+        salut, _ = await _resolve(client, civilite, "Leads", "Salutation", LEADS_LAYOUT_ID)
+        salut = salut or _salutation(civilite)
+        type_api, _ = await _resolve(client, type_investisseur, "Leads", "Type_d_investisseur", LEADS_LAYOUT_ID)
+        source_api, _ = await _resolve(client, source_detaillee, "Leads", "Source_d_taill_e", LEADS_LAYOUT_ID)
     payload = {
         "data": [
             {
                 "Layout": {"id": LEADS_LAYOUT_ID},
                 "Last_Name": nom,
                 "First_Name": prenom or "",
-                "Salutation": _salutation(civilite) or None,
+                "Salutation": salut or None,
                 "Company": societe or (f"{prenom} {nom}"),
                 "Email": email or None,
                 "Phone": telephone or None,
@@ -235,8 +317,8 @@ async def creer_prospect(
                 "Nom_normalis": _norm((prenom or "") + nom),
                 "T_l_phone_E164": tel or None,
                 "SIREN": siren_lie or None,
-                "Type_d_investisseur": type_investisseur,
-                "Source_d_taill_e": source_detaillee,
+                "Type_d_investisseur": type_api or type_investisseur,
+                "Source_d_taill_e": source_api or source_detaillee,
                 "Description": f"[{datetime.now():%d/%m/%Y}] Agent : création prospect (source : {source_detaillee})",
             }
         ],
@@ -330,7 +412,6 @@ async def synchroniser_appels(nb_jours: int = 7) -> str:
     Renvoie la liste des appels avec le lead associé et l'étape pipeline proposée.
     Lecture seule : les propositions d'évolution vers Rédaction contrat / Signature /
     Souscription doivent toujours être validées par Olivier."""
-    depuis = (datetime.now() - timedelta(days=nb_jours)).strftime("%Y-%m-%dT%H:%M:%S%z")[:-2] + ":00"
     async with httpx.AsyncClient(timeout=60) as client:
         r = await client.get(
             f"{ZOHO_CRM}/Calls",
@@ -341,8 +422,6 @@ async def synchroniser_appels(nb_jours: int = 7) -> str:
         appels = r.json().get("data", [])
 
     tel2lead = {}
-    leads = await _search("Leads", "(Type_d_investisseur:equals:Personne Physique)") if False else []
-    # index téléphones des leads investisseurs (recherche par critère non supportée sur tous les comptes : balayage léger)
     async with httpx.AsyncClient(timeout=60) as client:
         rl = await client.get(f"{ZOHO_CRM}/Leads", params={"per_page": 200, "fields": "id,Full_Name,T_l_phone_E164,Phone,Company"}, headers=await _h())
         rl.raise_for_status()
@@ -353,9 +432,6 @@ async def synchroniser_appels(nb_jours: int = 7) -> str:
 
     resultats = []
     for a in appels[:100]:
-        created = (a.get("Created_Time") or "")[:10]
-        sujets = a.get("What_Id") or {}
-        numero = _norm_phone(str(a.get("Call_Type") or ""))  # Call_Type non fiable
         resultats.append(
             {
                 "sujet": a.get("Subject"),
