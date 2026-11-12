@@ -33,7 +33,7 @@ Souscription = montant souscrit NET reçu (hors frais et commissions) ; le champ
 - Tu réponds toujours en français. Tu rends un tableau de synthèse après chaque traitement.
 """
 
-investisseurs_agent = agents.Agent(
+agent = agents.Agent(
     model="mistral-large-4",
     name="agent-investisseurs-zoho",
     instructions=SYSTEM_PROMPT,
