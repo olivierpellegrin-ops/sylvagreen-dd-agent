@@ -17,6 +17,9 @@ LEADS_LAYOUT_ID = "968010000002223131"  # disposition « Investisseurs » (Leads
 DEALS_LAYOUT_ID = "968010000002223015"  # disposition « Investisseurs » (Deals)
 PIPELINE = "Pipeline Investisseurs"
 
+# Champs téléphoniques du layout : Phone = « Téléphone » (fixe), Mobile = « Portable »,
+# T_l_phone_E164 = numéro de référence E164 (le portable en priorité).
+
 _access_token = None
 _picklist_cache: dict = {}
 
@@ -136,17 +139,18 @@ async def verifier_doublons(
     prenom: str = "",
     email: str = "",
     telephone: str = "",
+    portable: str = "",
     siren: str = "",
     ville: str = "",
 ) -> str:
     """Recherche les doublons AVANT toute création de prospect investisseur (3 passes :
-    SIREN société liée, puis email/téléphone E164, puis nom+prénom normalisés).
-    Renvoie un verdict JSON : aucun_match / match_certain (avec id de fiche) /
-    rapprochements_possibles (avec scores). Toujours appeler avant creer_prospect."""
+    SIREN société liée, puis email/téléphone E164 (portable en priorité, sinon fixe),
+    puis nom+prénom normalisés). Renvoie un verdict JSON : aucun_match / match_certain
+    (avec id de fiche) / rapprochements_possibles (avec scores). Toujours appeler avant
+    creer_prospect."""
     email = (email or "").strip().lower()
-    tel = _norm_phone(telephone)
+    tel = _norm_phone(portable or telephone)
     nom_norm = _norm((prenom or "") + (nom or ""))
-    resultats = []
 
     if siren:
         f = await _search("Leads", f"(SIREN:equals:{siren})")
@@ -162,6 +166,7 @@ async def verifier_doublons(
             return json.dumps({"verdict": "match_certain", "critere": "telephone", "fiches": f}, ensure_ascii=False)
 
     proches = await _search("Leads", f"(Nom_normalis:equals:{nom_norm})") if nom_norm else []
+    resultats = []
     for p in proches:
         nom_fiche = _norm(p.get("Full_Name") or (p.get("First_Name", "") + p.get("Last_Name", "")))
         score = 100 if nom_fiche == nom_norm else 90
@@ -246,6 +251,7 @@ async def maj_prospect(
     note: str = "",
     email: str = "",
     telephone: str = "",
+    portable: str = "",
     ville: str = "",
     siren: str = "",
     type_investisseur: str = "",
@@ -255,10 +261,12 @@ async def maj_prospect(
     son lead_id. Champs modifiables (seuls ceux fournis sont changés) : Civilité
     (civilite : M./Mme/Mlle...), Status du Prospect (statut_prospect : donner le libellé
     affiché dans Zoho, ex. "A contacter dans le futur" — la valeur API valide est résolue
-    automatiquement depuis les métadonnées du CRM), email, telephone, ville, SIREN de la
-    société liée (siren, à obtenir via chercher_siren si absent du listing), type
-    d'investisseur, source détaillée. note : texte ajouté en fin de Description au format
-    [JJ/MM/AAAA] Agent : note. Renvoie JSON {lead_id, modifie: [champs]}."""
+    automatiquement depuis les métadonnées du CRM), email, telephone (ligne fixe → champ
+    Téléphone), portable (smartphone → champ Portable, distinct du Téléphone), ville,
+    SIREN de la société liée (siren, à obtenir via chercher_siren si absent du listing),
+    type d'investisseur, source détaillée. Le champ Téléphone E164 est recalculé depuis
+    le portable si fourni, sinon le téléphone. note : texte ajouté en fin de Description
+    au format [JJ/MM/AAAA] Agent : note. Renvoie JSON {lead_id, modifie: [champs]}."""
     async with httpx.AsyncClient(timeout=60) as client:
         champs: dict = {"id": lead_id}
         modifies = []
@@ -285,8 +293,13 @@ async def maj_prospect(
             modifies.append("Email")
         if telephone:
             champs["Phone"] = telephone
-            champs["T_l_phone_E164"] = _norm_phone(telephone)
             modifies.append("Téléphone")
+        if portable:
+            champs["Mobile"] = portable
+            modifies.append("Portable")
+        if telephone or portable:
+            champs["T_l_phone_E164"] = _norm_phone(portable or telephone)
+            modifies.append("Téléphone E164")
         if ville:
             champs["City"] = ville
             modifies.append("Ville")
@@ -334,6 +347,7 @@ async def creer_prospect(
     societe: str = "",
     email: str = "",
     telephone: str = "",
+    portable: str = "",
     ville: str = "",
     siren_lie: str = "",
     type_investisseur: str = "Personne Physique",
@@ -342,12 +356,14 @@ async def creer_prospect(
 ) -> str:
     """Crée le prospect investisseur dans Zoho : lead (disposition Investisseurs) avec les
     champs de dédoublonnage (Nom_normalis, T_l_phone_E164, SIREN), la Civilité (Salutation :
-    M., Mme, Mlle... résolue automatiquement en valeur API valide du CRM), puis
-    conversion avec affaire au stade Qualification dans le Pipeline Investisseurs.
+    M., Mme, Mlle... résolue automatiquement en valeur API valide du CRM), puis conversion
+    avec affaire au stade Qualification dans le Pipeline Investisseurs. Distinction
+    téléphonique : telephone = ligne fixe (champ Téléphone), portable = smartphone (champ
+    Portable) ; le champ Téléphone E164 vaut le portable si fourni, sinon le fixe.
     À appeler uniquement si verifier_doublons renvoie aucun_match. Si la société est
     connue mais le SIREN absent du listing, obtenir le SIREN via chercher_siren.
     Renvoie les ids créés en JSON."""
-    tel = _norm_phone(telephone)
+    tel = _norm_phone(portable or telephone)
     async with httpx.AsyncClient(timeout=60) as client:
         salut, _ = await _resolve(client, civilite, "Leads", "Salutation", LEADS_LAYOUT_ID)
         salut = salut or _salutation(civilite)
@@ -363,6 +379,7 @@ async def creer_prospect(
                 "Company": societe or (f"{prenom} {nom}"),
                 "Email": email or None,
                 "Phone": telephone or None,
+                "Mobile": portable or None,
                 "City": ville or None,
                 "Nom_normalis": _norm((prenom or "") + nom),
                 "T_l_phone_E164": tel or None,
@@ -473,10 +490,10 @@ async def synchroniser_appels(nb_jours: int = 7) -> str:
 
     tel2lead = {}
     async with httpx.AsyncClient(timeout=60) as client:
-        rl = await client.get(f"{ZOHO_CRM}/Leads", params={"per_page": 200, "fields": "id,Full_Name,T_l_phone_E164,Phone,Company"}, headers=await _h())
+        rl = await client.get(f"{ZOHO_CRM}/Leads", params={"per_page": 200, "fields": "id,Full_Name,T_l_phone_E164,Phone,Mobile,Company"}, headers=await _h())
         rl.raise_for_status()
         for l in rl.json().get("data", []):
-            for t in (l.get("T_l_phone_E164"), l.get("Phone")):
+            for t in (l.get("T_l_phone_E164"), l.get("Mobile"), l.get("Phone")):
                 if t:
                     tel2lead[_norm_phone(t)] = l
 
