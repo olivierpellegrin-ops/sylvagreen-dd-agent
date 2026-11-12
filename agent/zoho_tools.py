@@ -12,6 +12,7 @@ from mistralai import agents
 
 ZOHO_ACCOUNTS = "https://accounts.zoho.eu/oauth/v2/token"
 ZOHO_CRM = "https://www.zohoapis.eu/crm/v8"
+PAPPERS_API = "https://api.pappers.fr/v2"
 LEADS_LAYOUT_ID = "968010000002223131"  # disposition « Investisseurs » (Leads)
 DEALS_LAYOUT_ID = "968010000002223015"  # disposition « Investisseurs » (Deals)
 PIPELINE = "Pipeline Investisseurs"
@@ -199,6 +200,44 @@ def _salutation(civilite: str) -> str:
     return _SALUTATIONS.get((civilite or "").strip().lower(), "")
 
 
+@agents.tool(annotations=agents.ToolAnnotations(read_only_hint=True))
+async def chercher_siren(nom_societe: str, ville: str = "", code_postal: str = "") -> str:
+    """Recherche une société dans la base Pappers (registre national des entreprises)
+    et renvoie jusqu'à 5 candidats : raison sociale, SIREN, ville et code postal du
+    siège, état (Actif, etc.). À utiliser pour renseigner le champ SIREN d'un prospect
+    dont la société est connue mais le SIREN absent du listing, via maj_prospect
+    (paramètre siren) ou creer_prospect (paramètre siren_lie). Si plusieurs candidats
+    se valent, présente-les à Olivier et attends son choix. Lecture seule, hors Zoho."""
+    params = {"q": nom_societe, "per_page": 5}
+    if ville:
+        params["ville"] = ville
+    if code_postal:
+        params["code_postal"] = code_postal
+    async with httpx.AsyncClient(timeout=30) as client:
+        r = await client.get(
+            f"{PAPPERS_API}/recherche",
+            params={**params, "api_token": os.environ.get("PAPPERS_API_KEY", "")},
+        )
+        r.raise_for_status()
+        resultats = r.json().get("resultats", [])
+    candidats = []
+    for e in resultats[:5]:
+        siege = e.get("siege") or {}
+        etat = e.get("etat")
+        if not isinstance(etat, str):
+            etat = (etat or {}).get("etat")
+        candidats.append(
+            {
+                "raison_sociale": e.get("nom_entreprise"),
+                "siren": e.get("siren"),
+                "ville_siege": siege.get("ville"),
+                "cp_siege": siege.get("code_postal"),
+                "etat": etat,
+            }
+        )
+    return json.dumps({"recherche": nom_societe, "candidats": candidats}, ensure_ascii=False)
+
+
 @agents.tool
 async def maj_prospect(
     lead_id: str,
@@ -208,6 +247,7 @@ async def maj_prospect(
     email: str = "",
     telephone: str = "",
     ville: str = "",
+    siren: str = "",
     type_investisseur: str = "",
     source_detaillee: str = "",
 ) -> str:
@@ -215,7 +255,8 @@ async def maj_prospect(
     son lead_id. Champs modifiables (seuls ceux fournis sont changés) : Civilité
     (civilite : M./Mme/Mlle...), Status du Prospect (statut_prospect : donner le libellé
     affiché dans Zoho, ex. "A contacter dans le futur" — la valeur API valide est résolue
-    automatiquement depuis les métadonnées du CRM), email, telephone, ville, type
+    automatiquement depuis les métadonnées du CRM), email, telephone, ville, SIREN de la
+    société liée (siren, à obtenir via chercher_siren si absent du listing), type
     d'investisseur, source détaillée. note : texte ajouté en fin de Description au format
     [JJ/MM/AAAA] Agent : note. Renvoie JSON {lead_id, modifie: [champs]}."""
     async with httpx.AsyncClient(timeout=60) as client:
@@ -249,6 +290,13 @@ async def maj_prospect(
         if ville:
             champs["City"] = ville
             modifies.append("Ville")
+        if siren:
+            siren = re.sub(r"\D", "", siren)
+            if len(siren) == 9:
+                champs["SIREN"] = siren
+                modifies.append("SIREN")
+            else:
+                return json.dumps({"erreur": f"SIREN invalide (9 chiffres attendus) : {siren}"}, ensure_ascii=False)
         if type_investisseur:
             api, valeurs = await _resolve(client, type_investisseur, "Leads", "Type_d_investisseur", LEADS_LAYOUT_ID)
             if api:
@@ -296,7 +344,9 @@ async def creer_prospect(
     champs de dédoublonnage (Nom_normalis, T_l_phone_E164, SIREN), la Civilité (Salutation :
     M., Mme, Mlle... résolue automatiquement en valeur API valide du CRM), puis
     conversion avec affaire au stade Qualification dans le Pipeline Investisseurs.
-    À appeler uniquement si verifier_doublons renvoie aucun_match. Renvoie les ids créés en JSON."""
+    À appeler uniquement si verifier_doublons renvoie aucun_match. Si la société est
+    connue mais le SIREN absent du listing, obtenir le SIREN via chercher_siren.
+    Renvoie les ids créés en JSON."""
     tel = _norm_phone(telephone)
     async with httpx.AsyncClient(timeout=60) as client:
         salut, _ = await _resolve(client, civilite, "Leads", "Salutation", LEADS_LAYOUT_ID)
@@ -316,7 +366,7 @@ async def creer_prospect(
                 "City": ville or None,
                 "Nom_normalis": _norm((prenom or "") + nom),
                 "T_l_phone_E164": tel or None,
-                "SIREN": siren_lie or None,
+                "SIREN": (re.sub(r"\D", "", siren_lie) or None) if siren_lie else None,
                 "Type_d_investisseur": type_api or type_investisseur,
                 "Source_d_taill_e": source_api or source_detaillee,
                 "Description": f"[{datetime.now():%d/%m/%Y}] Agent : création prospect (source : {source_detaillee})",

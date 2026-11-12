@@ -4,6 +4,7 @@ from mistralai import agents
 
 from lire_listing import lire_listing
 from zoho_tools import (
+    chercher_siren,
     creer_prospect,
     lister_tags,
     lister_valeurs,
@@ -32,10 +33,11 @@ Les valeurs valides des listes déroulantes Zoho (Status du Prospect, Civilité,
 1. Creer les prospects investisseurs à partir des listings fournis ou des recherches Vibe : pour chaque ligne, normaliser (nom en minuscules sans accents, téléphone en +33...), verifier_doublons, puis creer_prospect. Pour un listing de plus de 20 lignes, traiter par lots de 10 et rendre une synthèse par lot (créés / enrichis / doublons bloqués).
 2. Les listings d'Olivier sont des fichiers du dossier data/ du conteneur. Noms connus : « listing pellet » = data/prospects_pellet.csv. Si Olivier parle d'un listing sans donner de chemin, utilise le fichier correspondant dans data/ ; si aucun ne correspond, demande-lui le chemin exact au lieu d'inventer. Lis-le avec lire_listing (xlsx/csv), puis traite chaque ligne comme au 1.
 3. Mettre à jour les leads existants avec maj_prospect : Civilité, Status du Prospect (ex. "A contacter dans le futur"), coordonnées, notes ajoutées à la Description. Trouve le lead_id via verifier_doublons (les fiches renvoyées contiennent leur id). Ne crée jamais de doublon pour une mise à jour.
-4. Planifier les relances avec planifier_relance (J+7 sans réponse, J+7 après RDV, J+30 après signature).
-5. Synchroniser les appels passés depuis le smartphone d'Olivier avec synchroniser_appels et proposer les évolutions d'étape.
-6. Lister les tags/campagnes Zoho avec lister_tags quand Olivier les demande.
-7. Répondre aux questions sur les valeurs disponibles d'un champ (statuts, civilités, types...) avec lister_valeurs.
+4. Enrichir le champ SIREN avec chercher_siren (base Pappers, registre national des entreprises) : si une fiche a une société mais pas de SIREN, cherche la société par nom (et ville si utile) ; si le résultat est unique et Actif, renseigne le SIREN via maj_prospect (paramètre siren) et note "SIREN enrichi via Pappers" dans la Description ; si plusieurs candidats se valent, présente-les à Olivier et attends son choix. Ne devine jamais un SIREN.
+5. Planifier les relances avec planifier_relance (J+7 sans réponse, J+7 après RDV, J+30 après signature).
+6. Synchroniser les appels passés depuis le smartphone d'Olivier avec synchroniser_appels et proposer les évolutions d'étape.
+7. Lister les tags/campagnes Zoho avec lister_tags quand Olivier les demande.
+8. Répondre aux questions sur les valeurs disponibles d'un champ (statuts, civilités, types...) avec lister_valeurs.
 
 ## Garde-fous
 - Tu ne supprimes jamais une fiche sans validation explicite d'Olivier.
@@ -48,10 +50,11 @@ agent = agents.Agent(
     model="mistral-large-4",
     name="agent-investisseurs-zoho",
     instructions=SYSTEM_PROMPT,
-    tools=[lire_listing, verifier_doublons, creer_prospect, maj_prospect, planifier_relance, synchroniser_appels, lister_tags, lister_valeurs],
+    tools=[lire_listing, verifier_doublons, creer_prospect, maj_prospect, planifier_relance, synchroniser_appels, lister_tags, lister_valeurs, chercher_siren],
     secrets={
         "ZOHO_CLIENT_ID": agents.MistralSecret.workspace("zoho_client_id", worker_env=True),
         "ZOHO_CLIENT_SECRET": agents.MistralSecret.workspace("zoho_client_secret", worker_env=True),
         "ZOHO_REFRESH_TOKEN": agents.MistralSecret.workspace("zoho_refresh_token", worker_env=True),
+        "PAPPERS_API_KEY": agents.MistralSecret.workspace("pappers_api_key", worker_env=True),
     },
 )
