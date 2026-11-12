@@ -128,6 +128,80 @@ def _salutation(civilite: str) -> str:
 
 
 @agents.tool
+async def maj_prospect(
+    lead_id: str,
+    civilite: str = "",
+    statut_prospect: str = "",
+    note: str = "",
+    email: str = "",
+    telephone: str = "",
+    ville: str = "",
+    type_investisseur: str = "",
+    source_detaillee: str = "",
+) -> str:
+    """Met à jour un lead Zoho EXISTANT (ne crée jamais de fiche). Identifie la fiche par
+    son lead_id. Champs modifiables (seuls ceux fournis sont changés) : Civilité
+    (civilite : M./Mme/Mlle convertie en valeur Zoho), Status du Prospect (statut_prospect :
+    "A contacter dans le futur", "Tentative de contact", "Contacté", "Non contacté",
+    "Préqualifié", "Non qualifié", "Prospect indésirable", "Prospect perdu" — convertis
+    en valeurs API), email, telephone, ville, type d'investisseur, source détaillée.
+    note : texte ajouté en fin de Description au format [JJ/MM/AAAA] Agent : note.
+    Renvoie JSON {lead_id, modifie: [champs]}."""
+    mapping_statut = {
+        "acontacterdanslefutur": "Contact in Future", "contactinfuture": "Contact in Future",
+        "tentativedecontact": "Attempted to Contact", "attemptedtocontact": "Attempted to Contact",
+        "contacte": "Contacted", "contacted": "Contacted",
+        "noncontacte": "Not Contacted", "notcontacted": "Not Contacted",
+        "prequalifie": "Pre-Qualified", "prequalified": "Pre-Qualified",
+        "nonqualifie": "Not Qualified", "notqualified": "Not Qualified",
+        "prospectindesirable": "Junk Lead", "junklead": "Junk Lead", "indesirable": "Junk Lead",
+        "prospectperdu": "Lost Lead", "lostlead": "Lost Lead", "perdu": "Lost Lead",
+    }
+    async with httpx.AsyncClient(timeout=60) as client:
+        champs: dict = {"id": lead_id}
+        modifies = []
+        salut = _salutation(civilite)
+        if salut:
+            champs["Salutation"] = salut
+            modifies.append("Civilité")
+        if statut_prospect:
+            api = mapping_statut.get(_norm(statut_prospect), statut_prospect if statut_prospect in mapping_statut.values() else "")
+            if not api:
+                return json.dumps({"erreur": f"Status inconnu : {statut_prospect}. Valeurs acceptées : {sorted(set(mapping_statut.values()))}"}, ensure_ascii=False)
+            champs["Lead_Status"] = api
+            modifies.append("Status du Prospect")
+        if email:
+            champs["Email"] = email.strip().lower()
+            modifies.append("Email")
+        if telephone:
+            champs["Phone"] = telephone
+            champs["T_l_phone_E164"] = _norm_phone(telephone)
+            modifies.append("Téléphone")
+        if ville:
+            champs["City"] = ville
+            modifies.append("Ville")
+        if type_investisseur:
+            champs["Type_d_investisseur"] = type_investisseur
+            modifies.append("Type d'investisseur")
+        if source_detaillee:
+            champs["Source_d_taill_e"] = source_detaillee
+            modifies.append("Source détaillée")
+        if note:
+            r = await client.get(f"{ZOHO_CRM}/Leads/{lead_id}", params={"fields": "Description"}, headers=await _h())
+            desc = (r.json().get("data", [{}])[0].get("Description") or "") if r.status_code == 200 else ""
+            champs["Description"] = (desc + "\n" if desc else "") + f"[{datetime.now():%d/%m/%Y}] Agent : {note}"
+            modifies.append("Description")
+        if not modifies:
+            return json.dumps({"erreur": "Aucun champ à modifier."}, ensure_ascii=False)
+        r = await client.put(f"{ZOHO_CRM}/Leads", json={"data": [champs]}, headers=await _h())
+        r.raise_for_status()
+        data = r.json()["data"][0]
+        if data.get("status") != "success":
+            return json.dumps({"erreur": data}, ensure_ascii=False)
+        return json.dumps({"lead_id": lead_id, "modifie": modifies}, ensure_ascii=False)
+
+
+@agents.tool
 async def creer_prospect(
     nom: str,
     prenom: str = "",
