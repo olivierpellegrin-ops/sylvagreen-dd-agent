@@ -61,6 +61,7 @@ async def fetch_module_meta(module: str, access_token: Optional[str] = None) -> 
     Sinon, refresh token via les secrets d'environnement.
     Pour chaque disposition, les picklists specifiques sont aussi lues
     (settings/fields?layout_id=...) afin de detecter des valeurs renommees.
+    Un echantillon d'enregistrements est inclus pour verifier les valeurs API reellement stockees.
     """
     async with httpx.AsyncClient(timeout=60) as client:
         if not access_token:
@@ -144,9 +145,24 @@ async def fetch_module_meta(module: str, access_token: Optional[str] = None) -> 
                     {"layout": l["nom"], "layout_id": l["id"], "champs_picklist": champs_layout}
                 )
 
+        # Echantillon d'enregistrements : valeurs API reellement stockees dans les fiches
+        echantillons = []
+        try:
+            rs = await client.get(
+                f"{ZOHO_CRM}/{module}", params={"per_page": 3, "page": 1}, headers=headers
+            )
+            if rs.status_code == 200:
+                for rec in rs.json().get("data", []):
+                    echantillons.append(
+                        {k: rec.get(k) for k in ("id", "Full_Name", "Lead_Status", "Salutation") if rec.get(k) is not None}
+                    )
+        except Exception:
+            pass
+
         return {
             "module": module,
             "fields": fields,
             "layouts": layouts,
             "picklists_par_layout": picklists_par_layout,
+            "sample_records": echantillons,
         }
