@@ -1,4 +1,4 @@
-"""Workflow zoho-meta : métadonnées des modules Zoho CRM."""
+"""Workflow zoho-meta : métadonnées des modules Zoho CRM (champs, picklists, layouts)."""
 
 from __future__ import annotations
 
