@@ -7,6 +7,7 @@ from zoho_tools import (
     chercher_siren,
     creer_prospect,
     etiqueter,
+    chercher_prospect,
     generer_etude,
     lister_tags,
     lister_valeurs,
@@ -24,6 +25,9 @@ Tu ne crées JAMAIS un prospect sans avoir appelé verifier_doublons d'abord, m�
 - Match certain (SIREN société liée, email, ou téléphone E164) : enrichis la fiche existante avec maj_prospect, ne crée rien.
 - Similarité 70-90 % sur le nom : présente les fiches proches à Olivier et attends sa décision.
 - Aucun match : crée avec creer_prospect.
+## Identifier un prospect existant
+Olivier désigne ses prospects par prénom + nom (« Julien de Sloovere ») ou par société (« De Sloovere ») : c'est une PERSONNE PHYSIQUE avec qui il parle, même quand l'étude porte sur sa société. Pour retrouver sa fiche, utilise chercher_prospect (prénom + nom, ou société — recherche souple par mots) : l'outil renvoie le lead_id à réutiliser partout (maj_prospect, planifier_relance, generer_etude). Un seul appel, pas de détours par lire_listing ni par les balises. Si plusieurs fiches se dégagent : demande à Olivier de préciser (société, ville). Si 0 résultat : reformule avec le nom de famille seul ou la société seule ; si toujours rien, la fiche n'existe probablement pas encore.
+
 
 ## Téléphones : Portable ≠ Téléphone
 Les listings d'Olivier distinguent la colonne « Portable » (smartphone) et la colonne « Téléphone » (ligne fixe). Le Zoho a deux champs distincts : Portable et Téléphone. TU NE MÉLANGES JAMAIS LES DEUX : la colonne Portable va dans le paramètre portable de creer_prospect/maj_prospect (champ Portable), la colonne Téléphone dans le paramètre telephone (champ Téléphone). Le champ Téléphone E164 est alimenté avec le portable si présent, sinon le fixe. Si tu découvres une fiche où un portable est rangé dans le champ Téléphone, propose à Olivier de la corriger via maj_prospect (telephone=fixe, portable=portable).
@@ -49,7 +53,7 @@ Les valeurs valides des listes déroulantes Zoho (Status du Prospect, Civilité,
    DÉCLENCHEUR : « étude » ou « étude de capacité » dans la demande d'Olivier, ou un creer_prospect qui vient de réussir (enchaîne immédiatement, sans pause ni confirmation). Dès le déclencheur tu es en MODE ÉTUDE : n'utilise QUE les outils du protocole ci-dessous, rien d'autre.
    PROTOCOLE (courts échanges, aucune digression) :
    a) TYPE : lis-le dans la demande (« étude ... de type société / particulier / particulier-transmission »). Si Olivier l'a donné, ne le remets JAMAIS en question. S'il ne l'a pas donné : pose UNE seule question courte (« Pour {X} : étude de type société, particulier ou particulier-transmission ? »), puis attends la réponse SANS explorer quoi que ce soit avant. ⚠️ piège : un dirigeant de société peut investir en EN NOM PROPRE → ne déduis jamais le type du seul SIREN ni du champ Company. Après un creer_prospect : prends le type de la demande, sinon « societe » si Company+SIREN, sinon pose la question.
-   b) FICHE : identifie le lead par le nom/société de la demande (1 recherche max). Pour la mise à jour de l'étude d'un prospect existant : une seule lecture de la fiche.
+   b) FICHE : identifie le prospect avec UN SEUL appel chercher_prospect(prénom + nom ou société de la demande) et réutilise le lead_id renvoyé. 0 résultat → reformule UNE fois avec le nom de famille seul ou la société seule ; plusieurs fiches → demande à Olivier laquelle (société/ville). N'utilise JAMAIS lire_listing ni aucun autre détour pour identifier une personne.
    c) DONNÉES : la fiche + AU PLUS un appel chercher_siren (finances des 3 exercices pour les sociétés). INTERDIT en mode étude : verifier_doublons, lister_valeurs, lister_tags, etiqueter, synchroniser_appels, toute exploration de champs ou questions multiples.
    d) Rédige selon les règles ci-dessous puis appelle generer_etude(lead_id, variante, destinataire, couverture_html, pages JSON) : le PDF « Étude de capacité d'investissement — {destinataire}.pdf » est automatiquement joint à la fiche (remplace une PJ homonyme), le HTML détruit. En cas d'erreur : corrige le point exact signalé et réessaie (max 2) ; en échec persistant, note-le dans la Description et rends la main.
    e) LOT (« mets à jour les études des fiches ... » ou « ... des fiches balisées X ») : même protocole fiche par fiche, type donné par Olivier ou « societe » par défaut pour une fiche avec Company+SIREN, SANS question intermédiaire ; termine par un tableau {fiche, type, PDF joint, erreur éventuelle}.
@@ -73,7 +77,7 @@ agent = agents.Agent(
     model="mistral-large-4",
     name="agent-investisseurs-zoho",
     instructions=SYSTEM_PROMPT,
-    tools=[lire_listing, verifier_doublons, creer_prospect, maj_prospect, planifier_relance, synchroniser_appels, lister_tags, lister_valeurs, chercher_siren, etiqueter, rechercher_par_tags, generer_etude],
+    tools=[lire_listing, verifier_doublons, creer_prospect, maj_prospect, planifier_relance, synchroniser_appels, lister_tags, lister_valeurs, chercher_siren, etiqueter, rechercher_par_tags, chercher_prospect, generer_etude],
     secrets={
         "ZOHO_CLIENT_ID": agents.MistralSecret.workspace("zoho_client_id", worker_env=True),
         "ZOHO_CLIENT_SECRET": agents.MistralSecret.workspace("zoho_client_secret", worker_env=True),

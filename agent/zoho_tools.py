@@ -742,3 +742,95 @@ async def generer_etude(lead_id: str, variante: str, destinataire: str, couvertu
             {"nom_pdf": nom_pdf, "variante": variante, "nb_chapitres": nb_chapitres, "nb_pages": nb_pages, "attachment_id": data.get("details", {}).get("id"), "message": "Étude générée et jointe à la fiche (HTML détruit)"},
             ensure_ascii=False,
         )
+
+
+# ---------------------------------------------------------------------------
+# 13e outil : chercher un prospect par prénom + nom ou société (identification
+# d'une fiche EXISTANTE à partir d'une demande d'Olivier ; renvoie le lead_id).
+# ---------------------------------------------------------------------------
+_MOTS_VIDES = {
+    "sarl", "sas", "sasu", "eurl", "sa", "sci", "snc", "sca", "gmbh",
+    "les", "la", "le", "de", "du", "des", "et", "pour", "sur", "ste", "st",
+}
+_CIVILITES_API = {"Mr.": "M.", "Mrs.": "Mme", "Ms.": "Mlle", "Dr.": "Dr", "Prof.": "Pr"}
+
+
+def _mots_requete(requete: str) -> list:
+    mots = re.split(r"[^0-9A-Za-zÀ-ÖØ-öø-ÿ']+", requete or "")
+    mots = [m.strip("'") for m in mots if len(m.strip("'")) >= 3]
+    mots = [m for m in mots if m.lower() not in _MOTS_VIDES]
+    return list(dict.fromkeys(mots))[:4]
+
+
+async def chercher_prospect(requete: str) -> str:
+    """Retrouve une fiche Prospect (Lead) EXISTANTE à partir d'une demande d'Olivier,
+    qui désigne ses prospects par prénom + nom (« Julien de Sloovere ») ou par société
+    (« De Sloovere », « ALAIN THEVENIN SARL »). C'est LA façon d'identifier un prospect
+    avant tout maj_prospect / planifier_relance / generer_etude : NE PAS utiliser
+    lire_listing ni d'autres détours pour identifier une personne.
+    Recherche souple : chaque mot significatif de la requête (hors SARL/SAS/de/la/...)
+    est cherché dans Nom, Prénom, Société et Email (commence par, insensible à la
+    casse), les résultats sont fusionnés puis classés par nombre de mots reconnus.
+    Renvoie jusqu'à 5 fiches : JSON {nb, resultats: [{lead_id, civilite, prenom, nom,
+    nom_complet, societe, telephone, portable, email, ville, siren, score}]}. En cas
+    d'homonymes, demande à Olivier de préciser (société, ville) ; à 0 résultat, avec
+    le nom de famille seul ou la société seule."""
+    mots = _mots_requete(requete)
+    if not mots:
+        return json.dumps(
+            {"erreur": "requete trop courte : donner prénom + nom ou la société"},
+            ensure_ascii=False,
+        )
+    vus: dict = {}
+    for mot in mots:
+        crit = (
+            f"((Last_Name:starts_with:{mot})"
+            f"or(First_Name:starts_with:{mot})"
+            f"or(Company:starts_with:{mot})"
+            f"or(Email:starts_with:{mot}))"
+        )
+        try:
+            for r in await _search("Leads", crit):
+                vus.setdefault(str(r.get("id")), r)
+        except Exception:
+            continue  # mot non trouvé (ou critère refusé) : on passe au suivant
+
+    if not vus:
+        return json.dumps(
+            {"nb": 0, "resultats": [],
+             "message": "aucun prospect trouvé : reformuler avec le nom de famille seul "
+                        "ou la société seule ; sinon la fiche n'existe pas encore "
+                        "(la créer via creer_prospect)"},
+            ensure_ascii=False,
+        )
+
+    def _score(r: dict) -> int:
+        champs = " ".join(
+            _norm(x) for x in (r.get("Last_Name", ""), r.get("First_Name", ""), r.get("Company", ""), r.get("Email", ""))
+        ).split()
+        s = 0
+        for mot in mots:
+            nm = _norm(mot)
+            if any(w.startswith(nm) for w in champs):
+                s += 1
+        return s
+
+    classement = sorted(vus.values(), key=_score, reverse=True)[:5]
+    resultats = [
+        {
+            "lead_id": r.get("id"),
+            "civilite": _CIVILITES_API.get(r.get("Salutation", ""), r.get("Salutation", "")),
+            "prenom": r.get("First_Name", ""),
+            "nom": r.get("Last_Name", ""),
+            "nom_complet": " ".join(x for x in (r.get("First_Name", ""), r.get("Last_Name", "")) if x),
+            "societe": r.get("Company", ""),
+            "telephone": r.get("Phone", ""),
+            "portable": r.get("Mobile", ""),
+            "email": r.get("Email", ""),
+            "ville": r.get("City", ""),
+            "siren": r.get("SIREN", ""),
+            "score": _score(r),
+        }
+        for r in classement
+    ]
+    return json.dumps({"nb": len(resultats), "resultats": resultats}, ensure_ascii=False)
