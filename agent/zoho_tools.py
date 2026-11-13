@@ -749,17 +749,32 @@ async def generer_etude(lead_id: str, variante: str, destinataire: str, couvertu
 # d'une fiche EXISTANTE à partir d'une demande d'Olivier ; renvoie le lead_id).
 # ---------------------------------------------------------------------------
 _MOTS_VIDES = {
+    # formes de sociétés et petits mots
     "sarl", "sas", "sasu", "eurl", "sa", "sci", "snc", "sca", "gmbh",
     "les", "la", "le", "de", "du", "des", "et", "pour", "sur", "ste", "st",
+    # mots génériques des demandes d'Olivier : JAMAIS des identités
+    "zoho", "crm", "prospect", "prospects", "fiche", "fiches", "etude", "etudes",
+    "capacite", "investissement", "societe", "societes", "particulier",
+    "transmission", "type", "maj", "mise", "jour", "mets", "mettre", "genere",
+    "generer", "generant", "cree", "creer", "creation", "nom", "adresse", "ville",
+    "telephone", "portable", "siren", "siret", "balise", "balises", "tag", "tags",
+    "appel", "appels", "relance", "relances", "contact", "contacts", "rendezvous",
+    "rdv", "email", "mail", "merci", "avec", "dans", "que", "qui", "quel", "quelle",
+    "aussi", "toujours", "directement", "please",
 }
 _CIVILITES_API = {"Mr.": "M.", "Mrs.": "Mme", "Ms.": "Mlle", "Dr.": "Dr", "Prof.": "Pr"}
 
 
 def _mots_requete(requete: str) -> list:
+    """Extrait de la requête les mots-recherche UTILES : ignore les mots vides
+    (normalisés accents/casse) et privilégie les noms propres (initiale majuscule)
+    pour rester robuste même si l'agent passe la phrase complète de la demande."""
+    vides = {_norm(m) for m in _MOTS_VIDES}
     mots = re.split(r"[^0-9A-Za-zÀ-ÖØ-öø-ÿ']+", requete or "")
     mots = [m.strip("'") for m in mots if len(m.strip("'")) >= 3]
-    mots = [m for m in mots if m.lower() not in _MOTS_VIDES]
-    return list(dict.fromkeys(mots))[:4]
+    garde = [m for m in mots if _norm(m) not in vides]
+    propres = [m for m in garde if m[:1].isupper()]
+    return list(dict.fromkeys(propres or garde))[:4]
 
 
 @agents.tool(annotations=agents.ToolAnnotations(read_only_hint=True))
@@ -775,7 +790,9 @@ async def chercher_prospect(requete: str) -> str:
     Renvoie jusqu'à 5 fiches : JSON {nb, resultats: [{lead_id, civilite, prenom, nom,
     nom_complet, societe, telephone, portable, email, ville, siren, score}]}. En cas
     d'homonymes, demande à Olivier de préciser (société, ville) ; à 0 résultat, avec
-    le nom de famille seul ou la société seule."""
+    le nom de famille seul ou la société seule. requete = idéalement le prénom + nom
+    ou la société SEULS (pas la phrase complète) ; les mots génériques et les noms
+    propres restants d'une phrase entière sont néanmoins filtrés automatiquement."""
     mots = _mots_requete(requete)
     if not mots:
         return json.dumps(
