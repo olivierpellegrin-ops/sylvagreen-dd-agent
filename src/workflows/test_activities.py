@@ -156,9 +156,31 @@ async def sonder_geo(ville: str = "Lecelles") -> dict:
 @workflows.activity()
 async def executer_preparer(lead_id: str, variante: str = "societe") -> dict:
     """Importe le zoho_tools.py de l'agent (dans le conteneur, /app/agent) et
-    execute preparer_etude : test end-to-end avec les secrets du deployment."""
+    execute preparer_etude : test end-to-end avec les secrets du deployment.
+    Le conteneur workflow n'a pas mistralai-agents : on stubbe `agents` (les
+    décorateurs @agents.tool sont neutres pour le test)."""
     import json
     import sys
+    import types
+
+    import mistralai
+
+    if not hasattr(mistralai, "agents"):
+        class _Tool:
+            def __call__(self, fn=None, **kw):
+                if fn is not None:
+                    return fn
+                return lambda f: f
+
+        class _TA:
+            def __init__(self, **kw):
+                self.kw = kw
+
+        fake = types.ModuleType("mistralai.agents")
+        fake.tool = _Tool()
+        fake.ToolAnnotations = _TA
+        sys.modules["mistralai.agents"] = fake
+        mistralai.agents = fake
 
     if "/app/agent" not in sys.path:
         sys.path.insert(0, "/app/agent")
