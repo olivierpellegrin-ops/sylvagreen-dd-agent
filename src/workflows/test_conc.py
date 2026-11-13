@@ -6,7 +6,7 @@ import mistralai.workflows as workflows
 from mistralai.workflows import workflow
 
 with workflow.unsafe.imports_passed_through():
-    from .test_activities import sonder_recents
+    from .test_activities import sonder_pappers_concurrents
 
 
 @workflows.workflow.define(
@@ -17,4 +17,4 @@ with workflow.unsafe.imports_passed_through():
 class TestConcurrentsWorkflow:
     @workflows.workflow.entrypoint
     async def run(self, input: dict) -> dict:
-        return await sonder_recents()
+        return await sonder_pappers_concurrents()

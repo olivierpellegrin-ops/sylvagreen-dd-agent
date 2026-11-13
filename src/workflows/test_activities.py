@@ -280,3 +280,33 @@ async def sonder_recents() -> dict:
         return {"status": rc.status_code, "comptes": [
             {k: c.get(k) for k in ("Account_Name", "Industry", "Created_Time", "Billing_City", "Description", "Website", "Billing_Latitude", "Billing_Longitude")}
             for c in data]}
+
+
+@workflows.activity()
+async def sonder_pappers_concurrents() -> dict:
+    """Test Pappers /recherche geolocalise : concurrents autour de De Sloovere."""
+    async with httpx.AsyncClient(timeout=120) as client:
+        base = {"api_key": os.environ.get("PAPPERS_API_KEY", "")}
+
+        # essai 1 : latitude/longitude/rayon + activites NAF 4673A (commerce de gros de combustibles)
+        p1 = dict(base)
+        p1.update({"latitude": 50.476343, "longitude": 3.401422, "rayon": 60,
+                   "activites": "46.73A", "per_page": 10})
+        r1 = await client.get("https://api.pappers.fr/v2/recherche", params=p1)
+
+        # essai 2 : q textuel granulés + departement
+        p2 = dict(base)
+        p2.update({"q": "granulés bois", "departement": "59", "per_page": 10})
+        r2 = await client.get("https://api.pappers.fr/v2/recherche", params=p2)
+
+        def extraire(r):
+            if r.status_code != 200:
+                return {"status": r.status_code, "corps": r.text[:200]}
+            data = r.json().get("resultats", [])
+            return {"status": 200, "nb_total": r.json().get("nb_entreprises_total"),
+                    "noms": [{"nom": e.get("nom_entreprise"), "ville": (e.get("siege") or {}).get("ville"),
+                              "naf": e.get("libelle_activite_principale"),
+                              "lat": (e.get("siege") or {}).get("latitude"),
+                              "lon": (e.get("siege") or {}).get("longitude")} for e in data]}
+
+        return {"essai_4673A_geo": extraire(r1), "essai_granules_59": extraire(r2)}
