@@ -929,8 +929,15 @@ async def preparer_etude(lead_id: str, variante: str = "societe") -> str:
                         finances = (r0.get("finances") or [])[:3]
                         finances_dispo = bool(finances)
                         sie = r0.get("siege") or {}
-                        if not street and sie.get("adresse"):
-                            modifs["Street"] = sie["adresse"]
+                        adr_siege = sie.get("adresse")
+                        if isinstance(adr_siege, dict):
+                            adr_siege = " ".join(
+                                x for x in (adr_siege.get("adresse_ligne_1"), adr_siege.get("adresse_ligne_2")) if x
+                            ) or None
+                        elif not isinstance(adr_siege, str):
+                            adr_siege = sie.get("adresse_ligne_1") if isinstance(sie.get("adresse_ligne_1"), str) else None
+                        if not street and adr_siege:
+                            modifs["Street"] = adr_siege
                         if not zip_ and sie.get("code_postal"):
                             modifs["Zip_Code"] = sie["code_postal"]
                         if not city and sie.get("ville"):
