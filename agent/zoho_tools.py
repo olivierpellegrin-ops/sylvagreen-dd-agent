@@ -707,10 +707,23 @@ async def generer_etude(lead_id: str, variante: str, destinataire: str, couvertu
 
     # HTML -> PDF A4 (marges déjà à 0 dans le gabarit), puis HTML détruit
     import tempfile
+    import traceback
     from weasyprint import HTML as WHTML
     tmp = tempfile.NamedTemporaryFile(suffix=".pdf", delete=False)
     tmp.close()
-    WHTML(string=html).write_pdf(tmp.name)
+    try:
+        WHTML(string=html).write_pdf(tmp.name)
+    except Exception as e:
+        # renvoyer la VRAIE erreur au lieu d'un crash muet (« unexpected error »)
+        # pour que l'agent puisse corriger le point exact et réessayer
+        tb = traceback.format_exc()
+        marqueurs = [l for l in tb.splitlines() if "site-packages" in l or "Error" in l or "error" in l]
+        return json.dumps(
+            {"erreur": f"conversion PDF échouée : {type(e).__name__}: {e}",
+             "indices": " | ".join(marqueurs[:4])[:400],
+             "action": "si l'erreur vient de weasyprint/flex (TypeError int+str), c'est un bug de version : le signaler à Olivier ; sinon corriger le contenu signalé"},
+            ensure_ascii=False,
+        )
     pdf = open(tmp.name, "rb").read()
     os.unlink(tmp.name)  # PDF temporaire local ; la version durable est la pièce jointe Zoho
     del html  # le HTML ne doit exister nulle part : il vivait uniquement en mémoire

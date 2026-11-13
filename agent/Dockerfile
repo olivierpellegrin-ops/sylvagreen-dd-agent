@@ -12,7 +12,7 @@ RUN apt-get update \
 WORKDIR /app
 COPY . .
 
-RUN pip install --no-cache-dir "mistralai-agents>=1.0,<2" "httpx>=0.27,<1" "pydantic>=2,<3" "openpyxl>=3.1,<4" "weasyprint>=61,<64" \
+RUN pip install --no-cache-dir "mistralai-agents>=1.0,<2" "httpx>=0.27,<1" "pydantic>=2,<3" "openpyxl>=3.1,<4" "weasyprint>=63" \
  && useradd --create-home --shell /usr/sbin/nologin agent \
  && chown -R agent:agent /app
 
