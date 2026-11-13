@@ -17,4 +17,4 @@ with workflow.unsafe.imports_passed_through():
 class TestConcurrentsWorkflow:
     @workflows.workflow.entrypoint
     async def run(self, input: dict) -> dict:
-        return await sonder_concurrents()
+        return await sonder_recents()

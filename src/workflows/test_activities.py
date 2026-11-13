@@ -250,3 +250,33 @@ async def sonder_concurrents() -> dict:
             "total_comptes": total,
             "industries": industries,
         }
+
+
+@workflows.activity()
+async def sonder_recents() -> dict:
+    """Les 40 comptes les plus recents : comment marquer les distributeurs ?"""
+    async with httpx.AsyncClient(timeout=120) as client:
+        params = {
+            "refresh_token": os.environ.get("ZOHO_REFRESH_TOKEN", ""),
+            "client_id": os.environ.get("ZOHO_CLIENT_ID", ""),
+            "client_secret": os.environ.get("ZOHO_CLIENT_SECRET", ""),
+            "grant_type": "refresh_token",
+        }
+        t = await client.post(ZOHO_ACCOUNTS, params=params)
+        body = t.json()
+        if "access_token" not in body:
+            raise ValueError(f"Token Zoho refuse : HTTP {t.status_code}")
+        headers = {"Authorization": "Zoho-oauthtoken " + body["access_token"]}
+        rc = await client.get(
+            f"{ZOHO_CRM}/Accounts/search",
+            params={
+                "criteria": "(Created_Time:greater_than:2026-10-01)",
+                "fields": "Account_Name,Industry,Description,Created_Time,Billing_City,Billing_Latitude,Billing_Longitude,Website",
+                "sort_by": "Created_Time", "sort_order": "desc", "per_page": 40,
+            },
+            headers=headers,
+        )
+        data = rc.json().get("data", []) if rc.status_code == 200 else []
+        return {"status": rc.status_code, "comptes": [
+            {k: c.get(k) for k in ("Account_Name", "Industry", "Created_Time", "Billing_City", "Description", "Website", "Billing_Latitude", "Billing_Longitude")}
+            for c in data]}
