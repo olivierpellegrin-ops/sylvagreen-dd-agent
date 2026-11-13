@@ -1,4 +1,4 @@
-"""Activites de diagnostic : recherche Zoho + rendu WeasyPrint."""
+"""Activites de diagnostic : recherche Zoho, rendu WeasyPrint, sondage geo."""
 
 import os
 
@@ -24,20 +24,15 @@ async def tester_criteres(requete: str) -> dict:
         if "access_token" not in body:
             raise ValueError(f"Refresh token Zoho refuse : HTTP {t.status_code} / {body}")
         headers = {"Authorization": "Zoho-oauthtoken " + body["access_token"]}
-
         mots = [m for m in requete.replace("'", " ").split() if len(m) >= 3]
         mot1 = mots[0] if mots else ""
-        mot2 = mots[-1] if len(mots) > 1 else ""
         or_chain = (
             f"((Last_Name:starts_with:{mot1})or(First_Name:starts_with:{mot1})"
             f"or(Company:starts_with:{mot1})or(Email:starts_with:{mot1}))"
         )
-
-        tests: dict[str, str] = {
-            "first_starts": f"(First_Name:starts_with:{mot1})",
-            "last_starts": f"(Last_Name:starts_with:{mot2 or mot1})",
+        tests: dict = {
             "or_chain": or_chain,
-            "company_starts": f"(Company:starts_with:{mot2 or mot1})",
+            "company_starts": f"(Company:starts_with:{mots[-1] if len(mots) > 1 else mot1})",
         }
         resultats = {}
         for nom, crit in tests.items():
@@ -54,21 +49,16 @@ async def tester_criteres(requete: str) -> dict:
                         data = r.json().get("data", [])
                     except Exception:
                         data = []
-                    resultats[nom] = {
-                        "http": r.status_code,
-                        "criteria": crit,
-                        "nb": len(data),
-                        "corps_brut": r.text[:300] if r.status_code != 200 else "",
-                    }
+                    resultats[nom] = {"http": r.status_code, "nb": len(data),
+                                      "corps_brut": r.text[:300] if r.status_code != 200 else ""}
             except Exception as e:
                 resultats[nom] = {"criteria": crit, "erreur": str(e)[:300]}
-        return {"requete": requete, "mots": mots, "resultats": resultats}
+        return {"requete": requete, "resultats": resultats}
 
 
 @workflows.activity()
 async def tester_weasy(variante: str = "societe") -> dict:
-    """Rend le gabarit d'etude (logo + tokens remplis, contenu minimal) en PDF.
-    Rapporte la version WeasyPrint et l'erreur exacte eventuelle."""
+    """Rend le gabarit d'etude (logo + tokens remplis, contenu minimal) en PDF."""
     import traceback
 
     import weasyprint
@@ -78,7 +68,7 @@ async def tester_weasy(variante: str = "societe") -> dict:
                "particulier_transmission": "template_particulier_transmission.html"}.get(variante, "template_societe.html")
     chemin = os.path.join(base, gabarit)
     if not os.path.exists(chemin):
-        return {"erreur": f"gabarit introuvable : {chemin}", "cwd": os.getcwd(), "listing": os.listdir("/app")[:30]}
+        return {"erreur": f"gabarit introuvable : {chemin}", "listing": os.listdir("/app")[:30]}
     html = open(chemin, encoding="utf-8").read()
     logo = "".join(open(os.path.join(base, "logo_base64.txt"), encoding="utf-8").read().split())
     html = html.replace("{{LOGO}}", "data:image/png;base64," + logo)
@@ -90,18 +80,74 @@ async def tester_weasy(variante: str = "societe") -> dict:
             html = html.replace(token, "<h2>%d. Chapitre de test</h2><p>Contenu minimal de test.</p>" % n)
     try:
         pdf = weasyprint.HTML(string=html).write_pdf()
-        return {
-            "weasyprint": weasyprint.__version__,
-            "gabarit": gabarit,
-            "nb_h2": html.count("<h2>"),
-            "taille_pdf": len(pdf),
-            "succes": True,
-        }
+        return {"weasyprint": weasyprint.__version__, "gabarit": gabarit,
+                "nb_h2": html.count("<h2>"), "taille_pdf": len(pdf), "succes": True}
     except Exception as e:
-        return {
-            "weasyprint": weasyprint.__version__,
-            "gabarit": gabarit,
-            "succes": False,
-            "erreur": f"{type(e).__name__}: {e}",
-            "traceback": traceback.format_exc()[-600:],
+        return {"weasyprint": weasyprint.__version__, "succes": False,
+                "erreur": f"{type(e).__name__}: {e}",
+                "traceback": traceback.format_exc()[-600:]}
+
+
+@workflows.activity()
+async def sonder_geo(ville: str = "Lecelles") -> dict:
+    """Sonde : 1) champs GPS des Leads ; 2) comptes geolocalises par industrie ;
+    3) geocodage de la ville cible (api-adresse.data.gouv.fr)."""
+    async with httpx.AsyncClient(timeout=120) as client:
+        params = {
+            "refresh_token": os.environ.get("ZOHO_REFRESH_TOKEN", ""),
+            "client_id": os.environ.get("ZOHO_CLIENT_ID", ""),
+            "client_secret": os.environ.get("ZOHO_CLIENT_SECRET", ""),
+            "grant_type": "refresh_token",
         }
+        t = await client.post(ZOHO_ACCOUNTS, params=params)
+        body = t.json()
+        if "access_token" not in body:
+            raise ValueError(f"Token Zoho refuse : HTTP {t.status_code} / {body}")
+        headers = {"Authorization": "Zoho-oauthtoken " + body["access_token"]}
+
+        rf = await client.get(f"{ZOHO_CRM}/settings/fields", params={"module": "Leads"}, headers=headers)
+        champs = rf.json().get("fields", []) if rf.status_code == 200 else []
+        gps_leads = [c.get("api_name") for c in champs
+                     if any(k in (c.get("api_name") or "").lower() for k in ("latitude", "longitude", "gps"))]
+
+        comptes = []
+        page = 1
+        while page <= 3:
+            rc = await client.get(
+                f"{ZOHO_CRM}/Accounts",
+                params={
+                    "fields": "Account_Name,Industry,Billing_Latitude,Billing_Longitude,Billing_City,Website",
+                    "per_page": 200, "page": page,
+                },
+                headers=headers,
+            )
+            if rc.status_code != 200:
+                break
+            data = rc.json().get("data", [])
+            comptes.extend(data)
+            if len(data) < 200:
+                break
+            page += 1
+
+        par_industrie = {}
+        for c in comptes:
+            ind = c.get("Industry") or "(vide)"
+            lat, lon = c.get("Billing_Latitude"), c.get("Billing_Longitude")
+            entry = par_industrie.setdefault(ind, {"nb": 0, "geolocalises": 0})
+            entry["nb"] += 1
+            try:
+                if lat not in (None, "", 0) and float(lat) != 0 and lon not in (None, "", 0):
+                    entry["geolocalises"] += 1
+            except (TypeError, ValueError):
+                pass
+
+        rg = await client.get("https://api-adresse.data.gouv.fr/search/", params={"q": ville, "limit": 1})
+        geo = {}
+        if rg.status_code == 200 and rg.json().get("features"):
+            f = rg.json()["features"][0]
+            geo = {"label": f["properties"]["label"],
+                   "lat": f["geometry"]["coordinates"][1],
+                   "lon": f["geometry"]["coordinates"][0]}
+
+        return {"gps_champs_leads": gps_leads, "nb_comptes_lus": len(comptes),
+                "par_industrie": par_industrie, "geo_ville": geo}
