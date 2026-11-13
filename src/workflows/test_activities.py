@@ -188,3 +188,65 @@ async def executer_preparer(lead_id: str, variante: str = "societe") -> dict:
 
     resultat = await zt.preparer_etude(lead_id=lead_id, variante=variante)
     return json.loads(resultat)
+
+
+@workflows.activity()
+async def sonder_concurrents() -> dict:
+    """Cherche les comptes distributeurs : valeur exacte d'Industry + GPS."""
+    async with httpx.AsyncClient(timeout=120) as client:
+        params = {
+            "refresh_token": os.environ.get("ZOHO_REFRESH_TOKEN", ""),
+            "client_id": os.environ.get("ZOHO_CLIENT_ID", ""),
+            "client_secret": os.environ.get("ZOHO_CLIENT_SECRET", ""),
+            "grant_type": "refresh_token",
+        }
+        t = await client.post(ZOHO_ACCOUNTS, params=params)
+        body = t.json()
+        if "access_token" not in body:
+            raise ValueError(f"Token Zoho refuse : HTTP {t.status_code}")
+        headers = {"Authorization": "Zoho-oauthtoken " + body["access_token"]}
+
+        # 1) search par Industry
+        rs = await client.get(
+            f"{ZOHO_CRM}/Accounts/search",
+            params={"criteria": "(Industry:starts_with:Distributeur)", "per_page": 100},
+            headers=headers,
+        )
+        via_search = []
+        if rs.status_code == 200:
+            via_search = rs.json().get("data", [])
+
+        # 2) tous les comptes : industries distinctes (paging complet)
+        industries = {}
+        page, total = 1, 0
+        while page <= 10:
+            rc = await client.get(
+                f"{ZOHO_CRM}/Accounts",
+                params={"fields": "Account_Name,Industry,Billing_Latitude,Billing_Longitude", "per_page": 200, "page": page},
+                headers=headers,
+            )
+            if rc.status_code != 200:
+                industries["__http_error"] = {"page": page, "code": rc.status_code, "corps": rc.text[:150]}
+                break
+            data = rc.json().get("data", [])
+            total += len(data)
+            for c in data:
+                ind = c.get("Industry") or "(vide)"
+                e = industries.setdefault(ind, {"nb": 0, "avec_gps": 0})
+                e["nb"] += 1
+                try:
+                    if c.get("Billing_Latitude") not in (None, "") and float(c["Billing_Latitude"]) != 0:
+                        e["avec_gps"] += 1
+                except (TypeError, ValueError):
+                    pass
+            if len(data) < 200:
+                break
+            page += 1
+
+        return {
+            "search_distributeur": {"nb": len(via_search), "sample": [
+                {k: c.get(k) for k in ("Account_Name", "Industry", "Billing_Latitude", "Billing_Longitude")}
+                for c in via_search[:5]]},
+            "total_comptes": total,
+            "industries": industries,
+        }
