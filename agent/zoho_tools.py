@@ -872,6 +872,26 @@ async def chercher_prospect(requete: str) -> str:
 # l'étude : auto-enrichit la fiche (adresse registre, géolocalisation) puis
 # renvoie voisins (scieries, concurrents) + finances. Appelé AVANT la rédaction.
 # ---------------------------------------------------------------------------
+def _norm_nom(s: str) -> str:
+    """Nom normalise pour comparaison : minuscules, sans accents ni signes,
+    mots cretes (de, sarl, ets...) retires, espaces retires."""
+    s = unicodedata.normalize("NFKD", (s or "").lower())
+    s = "".join(c for c in s if not unicodedata.combining(c))
+    mots = re.sub(r"[^a-z0-9]+", " ", s).split()
+    cretes = {"de", "des", "du", "la", "le", "les", "l", "et", "ets",
+              "etablissements", "etablissement", "sarl", "sar l", "sas", "sa",
+              "sci", "ste", "see", "groupe", "societe", "eurl", "cuma", "sasu"}
+    return "".join(m for m in mots if m not in cretes)
+
+
+def _est_le_prospect(nom: str, societe_norm: str) -> bool:
+    """Vrai si ce voisin EST le prospect lui-meme (nom identique ou contenu)."""
+    if not societe_norm or len(societe_norm) < 4:
+        return False
+    n = _norm_nom(nom)
+    return bool(n) and (n == societe_norm or (len(n) >= 4 and n in societe_norm) or (societe_norm in n and len(societe_norm) >= 4))
+
+
 def _haversine_km(lat1, lon1, lat2, lon2):
     from math import asin, cos, radians, sin, sqrt
     rlat1, rlon1, rlat2, rlon2 = map(radians, (lat1, lon1, lat2, lon2))
@@ -904,6 +924,7 @@ async def preparer_etude(lead_id: str, variante: str = "societe") -> str:
         if rl.status_code != 200:
             return json.dumps({"erreur": f"fiche introuvable : {rl.status_code} {rl.text[:150]}"}, ensure_ascii=False)
         lead = rl.json()["data"][0]
+        societe_norm = _norm_nom(lead.get("Company"))
 
         modifs: dict = {}
         notes: list = []
@@ -1025,7 +1046,7 @@ async def preparer_etude(lead_id: str, variante: str = "societe") -> str:
                         "industrie": ind,
                         "distance_km": round(_haversine_km(lat, lon, clat, clon), 1),
                     })
-            scieries_voisines = sorted((v for v in voisins if "Scierie" in v["industrie"]), key=lambda x: x["distance_km"])[:5]
+            scieries_voisines = sorted((v for v in voisins if "Scierie" in v["industrie"] and not _est_le_prospect(v["nom"], societe_norm)), key=lambda x: x["distance_km"])[:5]
             # concurrents : comptes balisés « distributeurs » (Atlas 2019),
             # repli sur le fichier de référence data/distributeurs_geo.json
             concurrents_proches = []
@@ -1072,7 +1093,10 @@ async def preparer_etude(lead_id: str, variante: str = "societe") -> str:
                     )[:5]
                 except Exception:
                     pass
-            concurrents_proches = sorted(concurrents_proches, key=lambda x: x["distance_km"])[:5]
+            concurrents_proches = sorted(
+                (c for c in concurrents_proches if not _est_le_prospect(c["nom"], societe_norm)),
+                key=lambda x: x["distance_km"],
+            )[:5]
 
         manquants = []
         if not siren:
