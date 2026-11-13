@@ -865,3 +865,200 @@ async def chercher_prospect(requete: str) -> str:
         for r in classement
     ]
     return json.dumps({"nb": len(resultats), "resultats": resultats}, ensure_ascii=False)
+
+
+# ---------------------------------------------------------------------------
+# 14e outil : preparer_etude — le dossier de données de l'étude, dirigé PAR
+# l'étude : auto-enrichit la fiche (adresse registre, géolocalisation) puis
+# renvoie voisins (scieries, concurrents) + finances. Appelé AVANT la rédaction.
+# ---------------------------------------------------------------------------
+def _haversine_km(lat1, lon1, lat2, lon2):
+    from math import asin, cos, radians, sin, sqrt
+    rlat1, rlon1, rlat2, rlon2 = map(radians, (lat1, lon1, lat2, lon2))
+    a = sin((rlat2 - rlat1) / 2) ** 2 + cos(rlat1) * cos(rlat2) * sin((rlon2 - rlon1) / 2) ** 2
+    return 6371.0 * 2 * asin(sqrt(a))
+
+
+@agents.tool(annotations=agents.ToolAnnotations(read_only_hint=False))
+async def preparer_etude(lead_id: str, variante: str = "societe") -> str:
+    """PRÉPARE le dossier de données de l'étude de capacité d'un prospect, À APPELER
+    AVANT la rédaction (juste après avoir identifié la fiche, à la place d'une
+    lecture simple). C'est l'étude qui dirige les appels de données :
+    1. lit la fiche Prospect ;
+    2. si l'adresse est incomplète et qu'un SIREN est présent : récupère le siège
+       au registre national (Pappers) et MET À JOUR la fiche (rue, CP, ville) ;
+    3. si la géolocalisation manque : géocode l'adresse (api-adresse.data.gouv.fr,
+       gratuit) et ÉCRIT Latitude/Longitude dans la fiche ;
+    4. lit TOUS les comptes du CRM géolocalisés et calcule les voisins depuis le
+       prospect : scieries proches (Industry Scieries) et distributeurs de granulés
+       concurrents proches (Industry contenant « Distributeur »), distances en km ;
+    5. renvoie le dossier complet : identité (civilité, prénom, nom, société, SIREN),
+       adresse complète, coordonnées GPS, finances Pappers (3 exercices, ou
+       « comptes non publiés »), scieries_voisines (max 5), concurrents_proches
+       (max 5), champs encore manquants.
+    La rédaction de l'étude DOIT utiliser ces données (nommer les scieries voisines
+    avec leur distance, citer les concurrents proches par leur nom)."""
+    async with httpx.AsyncClient(timeout=120) as client:
+        rl = await client.get(f"{ZOHO_CRM}/Leads/{lead_id}", headers=await _h())
+        if rl.status_code != 200:
+            return json.dumps({"erreur": f"fiche introuvable : {rl.status_code} {rl.text[:150]}"}, ensure_ascii=False)
+        lead = rl.json()["data"][0]
+
+        modifs: dict = {}
+        notes: list = []
+        finances: list = []
+        finances_dispo = None  # None = inconnu, True/False = publiés ou non
+
+        # ---- registre national (Pappers) : UN SEUL appel, pour l'adresse
+        # manquante ET les finances ; ne complète QUE les champs vides de la fiche ----
+        street = (lead.get("Street") or "").strip()
+        zip_ = (lead.get("Zip_Code") or "").strip()
+        city = (lead.get("City") or "").strip()
+        siren = (lead.get("SIREN") or "").strip()
+        if siren:
+            try:
+                rp = await client.get(
+                    "https://api.pappers.fr/v2/recherche",
+                    params={"api_token": os.environ.get("PAPPERS_API_KEY", ""), "siren": siren},
+                )
+                if rp.status_code == 200:
+                    res = rp.json().get("resultats") or []
+                    if res:
+                        r0 = res[0]
+                        finances = (r0.get("finances") or [])[:3]
+                        finances_dispo = bool(finances)
+                        sie = r0.get("siege") or {}
+                        if not street and sie.get("adresse"):
+                            modifs["Street"] = sie["adresse"]
+                        if not zip_ and sie.get("code_postal"):
+                            modifs["Zip_Code"] = sie["code_postal"]
+                        if not city and sie.get("ville"):
+                            modifs["City"] = sie["ville"]
+                        if any(k in modifs for k in ("Street", "Zip_Code", "City")):
+                            notes.append("adresse complétée via le registre national des entreprises")
+                elif rp.status_code in (402, 403, 429):
+                    notes.append(f"Pappers indisponible (HTTP {rp.status_code}) : adresse/finances non complétées")
+            except Exception as e:
+                notes.append(f"registre national injoignable : {type(e).__name__}")
+
+        # ---- géolocalisation manquante -> api-adresse.data.gouv.fr ----
+        def _fl(v):
+            try:
+                f = float(str(v).replace(",", "."))
+                return f if abs(f) > 0.0001 else None
+            except (TypeError, ValueError):
+                return None
+
+        lat, lon = _fl(lead.get("Latitude")), _fl(lead.get("Longitude"))
+        geo_ok = bool(lat and lon)
+        if not geo_ok:
+            q = " ".join(x for x in (modifs.get("Street", street), modifs.get("Zip_Code", zip_), modifs.get("City", city)) if x)
+            if q:
+                try:
+                    rg = await client.get(
+                        "https://api-adresse.data.gouv.fr/search/",
+                        params={"q": q, "limit": 1},
+                    )
+                    feats = rg.json().get("features") if rg.status_code == 200 else []
+                    if feats:
+                        coords = feats[0]["geometry"]["coordinates"]
+                        lon, lat = coords[0], coords[1]
+                        modifs.update({"Latitude": str(lat), "Longitude": str(lon)})
+                        notes.append("géolocalisation ajoutée à la fiche (api-adresse.data.gouv.fr)")
+                        geo_ok = True
+                except Exception as e:
+                    notes.append(f"géocodage impossible : {type(e).__name__}")
+            else:
+                notes.append("géolocalisation impossible : adresse de la fiche vide")
+        else:
+            lat, lon = lat, lon
+
+        # ---- écrire les enrichissements dans la fiche ----
+        if modifs:
+            rd = await client.get(f"{ZOHO_CRM}/Leads/{lead_id}", params={"fields": "Description"}, headers=await _h())
+            desc = (rd.json().get("data", [{}])[0].get("Description") or "") if rd.status_code == 200 else ""
+            note = f"[{datetime.now():%d/%m/%Y}] Agent : fiche enrichie pour l'étude ({', '.join(notes)})"
+            payload = {"data": [dict({"id": lead_id, "Description": (desc + "\n" if desc else "") + note}, **{k: str(v) for k, v in modifs.items()})]}
+            ru = await client.put(f"{ZOHO_CRM}/Leads", json=payload, headers=await _h())
+            maj_ok = ru.status_code in (200, 201)
+        else:
+            maj_ok = None
+
+        # ---- voisins : tous les comptes géolocalisés ----
+        scieries_voisines, concurrents_proches = [], []
+        if geo_ok:
+            comptes, page = [], 1
+            while page <= 10:
+                rc = await client.get(
+                    f"{ZOHO_CRM}/Accounts",
+                    params={
+                        "fields": "Account_Name,Industry,Billing_Latitude,Billing_Longitude,Billing_City",
+                        "per_page": 200, "page": page,
+                    },
+                    headers=await _h(),
+                )
+                if rc.status_code != 200:
+                    break
+                data = rc.json().get("data", [])
+                comptes.extend(data)
+                if len(data) < 200:
+                    break
+                page += 1
+            voisins = []
+            for c in comptes:
+                clat, clon = _fl(c.get("Billing_Latitude")), _fl(c.get("Billing_Longitude"))
+                if not (clat and clon):
+                    continue
+                ind = (c.get("Industry") or "")
+                if "Scierie" in ind or "istributeur" in ind:
+                    voisins.append({
+                        "nom": c.get("Account_Name", ""),
+                        "ville": c.get("Billing_City", ""),
+                        "industrie": ind,
+                        "distance_km": round(_haversine_km(lat, lon, clat, clon), 1),
+                    })
+            scieries_voisines = sorted((v for v in voisins if "Scierie" in v["industrie"]), key=lambda x: x["distance_km"])[:5]
+            concurrents_proches = sorted((v for v in voisins if "istributeur" in v["industrie"]), key=lambda x: x["distance_km"])[:5]
+
+        manquants = []
+        if not siren:
+            manquants.append("SIREN (recherche registre possible via chercher_siren si la société est nommée)")
+        if not (street or modifs.get("Street")):
+            manquants.append("adresse (rue)")
+        if not geo_ok:
+            manquants.append("géolocalisation")
+        if variante == "societe" and finances_dispo is False:
+            manquants.append("comptes non publiés au registre -> variante « comptes confidentiels » du chapitre Lecture financière")
+
+        return json.dumps({
+            "lead_id": lead_id,
+            "identite": {
+                "civilite": _CIVILITES_API.get(lead.get("Salutation", ""), lead.get("Salutation", "")),
+                "prenom": lead.get("First_Name", ""),
+                "nom": lead.get("Last_Name", ""),
+                "societe": lead.get("Company", ""),
+                "siren": siren,
+                "telephone": lead.get("Phone", ""),
+                "portable": lead.get("Mobile", ""),
+                "email": lead.get("Email", ""),
+            },
+            "adresse": {
+                "rue": modifs.get("Street", street),
+                "code_postal": modifs.get("Zip_Code", zip_),
+                "ville": modifs.get("City", city),
+                "region": lead.get("State", ""),
+                "latitude": lat if geo_ok else None,
+                "longitude": lon if geo_ok else None,
+            },
+            "finances_pappers": [
+                {"chiffre_affaires": f.get("chiffre_affaires"), "resultat_net": f.get("resultat_net"),
+                 "exercice": f.get("date_cloture_exercice")}
+                for f in finances
+            ] if finances else [],
+            "comptes_publies": finances_dispo,
+            "scieries_voisines": scieries_voisines,
+            "concurrents_proches": concurrents_proches,
+            "fiche_mise_a_jour": {"ok": maj_ok, "champs": sorted(modifs.keys())} if modifs else "aucune mise à jour nécessaire",
+            "donnees_manquantes": manquants,
+            "notes": notes,
+        }, ensure_ascii=False)

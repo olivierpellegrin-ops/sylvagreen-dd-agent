@@ -151,3 +151,18 @@ async def sonder_geo(ville: str = "Lecelles") -> dict:
 
         return {"gps_champs_leads": gps_leads, "nb_comptes_lus": len(comptes),
                 "par_industrie": par_industrie, "geo_ville": geo}
+
+
+@workflows.activity()
+async def executer_preparer(lead_id: str, variante: str = "societe") -> dict:
+    """Importe le zoho_tools.py de l'agent (dans le conteneur, /app/agent) et
+    execute preparer_etude : test end-to-end avec les secrets du deployment."""
+    import json
+    import sys
+
+    if "/app/agent" not in sys.path:
+        sys.path.insert(0, "/app/agent")
+    import zoho_tools as zt
+
+    resultat = await zt.preparer_etude(lead_id=lead_id, variante=variante)
+    return json.loads(resultat)

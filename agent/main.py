@@ -9,6 +9,7 @@ from zoho_tools import (
     etiqueter,
     chercher_prospect,
     generer_etude,
+    preparer_etude,
     lister_tags,
     lister_valeurs,
     maj_prospect,
@@ -54,7 +55,7 @@ Les valeurs valides des listes déroulantes Zoho (Status du Prospect, Civilité,
    PROTOCOLE (courts échanges, aucune digression) :
    a) TYPE : lis-le dans la demande (« étude ... de type société / particulier / particulier-transmission »). Si Olivier l'a donné, ne le remets JAMAIS en question. S'il ne l'a pas donné : pose UNE seule question courte (« Pour {X} : étude de type société, particulier ou particulier-transmission ? »), puis attends la réponse SANS explorer quoi que ce soit avant. ⚠️ piège : un dirigeant de société peut investir en EN NOM PROPRE → ne déduis jamais le type du seul SIREN ni du champ Company. Après un creer_prospect : prends le type de la demande, sinon « societe » si Company+SIREN, sinon pose la question.
    b) FICHE : identifie le prospect avec UN SEUL appel chercher_prospect(en ne passant QUE le prénom + nom ou la société, jamais la phrase complète) et réutilise le lead_id renvoyé. 0 résultat → reformule UNE fois avec le nom de famille seul ou la société seule ; plusieurs fiches → demande à Olivier laquelle (société/ville). N'utilise JAMAIS lire_listing ni aucun autre détour pour identifier une personne.
-   c) DONNÉES : la fiche + AU PLUS un appel chercher_siren (finances des 3 exercices pour les sociétés). INTERDIT en mode étude : verifier_doublons, lister_valeurs, lister_tags, etiqueter, synchroniser_appels, toute exploration de champs ou questions multiples.
+   c) DONNÉES : UN SEUL appel preparer_etude(lead_id, variante) : il lit la fiche, AUTO-COMPLÈTE l'adresse depuis le registre si elle manque, GÉOLOCALISE et écrit Latitude/Longitude dans la fiche si c'est absent, et renvoie le dossier complet (identité, adresse, GPS, finances Pappers des 3 exercices ou « comptes non publiés », scieries_voisines avec distances, concurrents_proches avec distances, données_manquantes). La rédaction DOIT utiliser ces données : chapitre Scieries voisines = NOMMER chaque scierie renvoyée avec sa distance ; chapitre Positionnement concurrentiel = CITER les concurrents proches par leur nom et leur distance ; si la liste est vide, formuler neutrement. INTERDIT en mode étude : verifier_doublons, lister_valeurs, lister_tags, etiqueter, synchroniser_appels, chercher_siren en plus de preparer_etude, toute exploration de champs ou questions multiples.
    d) Rédige selon les règles ci-dessous puis appelle generer_etude(lead_id, variante, destinataire, couverture_html, pages JSON) : le PDF « Étude de capacité d'investissement — {destinataire}.pdf » est automatiquement joint à la fiche (remplace une PJ homonyme), le HTML détruit. En cas d'erreur : corrige le point exact signalé et réessaie (max 2) ; en échec persistant, note-le dans la Description et rends la main.
    e) LOT (« mets à jour les études des fiches ... » ou « ... des fiches balisées X ») : même protocole fiche par fiche, type donné par Olivier ou « societe » par défaut pour une fiche avec Company+SIREN, SANS question intermédiaire ; termine par un tableau {fiche, type, PDF joint, erreur éventuelle}.
    Budget : au plus 4 appels d'outils avant generer_etude.
@@ -77,7 +78,7 @@ agent = agents.Agent(
     model="mistral-large-4",
     name="agent-investisseurs-zoho",
     instructions=SYSTEM_PROMPT,
-    tools=[lire_listing, verifier_doublons, creer_prospect, maj_prospect, planifier_relance, synchroniser_appels, lister_tags, lister_valeurs, chercher_siren, etiqueter, rechercher_par_tags, chercher_prospect, generer_etude],
+    tools=[lire_listing, verifier_doublons, creer_prospect, maj_prospect, planifier_relance, synchroniser_appels, lister_tags, lister_valeurs, chercher_siren, etiqueter, rechercher_par_tags, chercher_prospect, generer_etude, preparer_etude],
     secrets={
         "ZOHO_CLIENT_ID": agents.MistralSecret.workspace("zoho_client_id", worker_env=True),
         "ZOHO_CLIENT_SECRET": agents.MistralSecret.workspace("zoho_client_secret", worker_env=True),
