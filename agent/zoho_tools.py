@@ -889,9 +889,10 @@ async def preparer_etude(lead_id: str, variante: str = "societe") -> str:
        au registre national (Pappers) et MET À JOUR la fiche (rue, CP, ville) ;
     3. si la géolocalisation manque : géocode l'adresse (api-adresse.data.gouv.fr,
        gratuit) et ÉCRIT Latitude/Longitude dans la fiche ;
-    4. lit TOUS les comptes du CRM géolocalisés et calcule les voisins depuis le
-       prospect : scieries proches (Industry Scieries) et distributeurs de granulés
-       concurrents proches (Industry contenant « Distributeur »), distances en km ;
+    4. lit TOUS les comptes du CRM géolocalisés pour les SCIERIES proches
+       (Industry Scieries, distances en km) et calcule les DISTRIBUTEURS DE GRANULÉS
+       concurrents proches depuis le fichier de référence data/distributeurs_geo.json
+       (49 distributeurs du programme, géolocalisés), distances en km ;
     5. renvoie le dossier complet : identité (civilité, prénom, nom, société, SIREN),
        adresse complète, coordonnées GPS, finances Pappers (3 exercices, ou
        « comptes non publiés »), scieries_voisines (max 5), concurrents_proches
@@ -1010,7 +1011,7 @@ async def preparer_etude(lead_id: str, variante: str = "societe") -> str:
                 if not (clat and clon):
                     continue
                 ind = (c.get("Industry") or "")
-                if "Scierie" in ind or "istributeur" in ind:
+                if "Scierie" in ind:
                     voisins.append({
                         "nom": c.get("Account_Name", ""),
                         "ville": c.get("Billing_City", ""),
@@ -1018,7 +1019,21 @@ async def preparer_etude(lead_id: str, variante: str = "societe") -> str:
                         "distance_km": round(_haversine_km(lat, lon, clat, clon), 1),
                     })
             scieries_voisines = sorted((v for v in voisins if "Scierie" in v["industrie"]), key=lambda x: x["distance_km"])[:5]
-            concurrents_proches = sorted((v for v in voisins if "istributeur" in v["industrie"]), key=lambda x: x["distance_km"])[:5]
+            # concurrents : fichier de référence des distributeurs de granulés (géolocalisés)
+            try:
+                with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "distributeurs_geo.json"), encoding="utf-8") as f:
+                    _distributeurs_ref = json.load(f)
+                concurrents_proches = sorted(
+                    (
+                        {"nom": d.get("nom", ""), "ville": d.get("ville", ""),
+                         "distance_km": round(_haversine_km(lat, lon, d["lat"], d["lon"]), 1)}
+                        for d in _distributeurs_ref
+                        if d.get("lat") and d.get("lon")
+                    ),
+                    key=lambda x: x["distance_km"],
+                )[:5]
+            except Exception:
+                concurrents_proches = []
 
         manquants = []
         if not siren:
