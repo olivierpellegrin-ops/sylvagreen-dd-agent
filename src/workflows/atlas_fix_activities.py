@@ -63,3 +63,34 @@ async def baliser_atlas() -> dict:
 
         return {"cibles": len(cibles), "balises_ok": ok, "erreurs": errs[:8],
                 "introuvables": [noms[n] for n in noms if n not in {(c.get("Account_Name") or "").strip().upper() for c in cibles}]}
+
+
+@workflows.activity()
+async def sonder_tag_distributeurs() -> dict:
+    """Verifie que la recherche de comptes par balise distributeurs fonctionne."""
+    async with httpx.AsyncClient(timeout=60) as client:
+        params = {
+            "refresh_token": os.environ.get("ZOHO_REFRESH_TOKEN", ""),
+            "client_id": os.environ.get("ZOHO_CLIENT_ID", ""),
+            "client_secret": os.environ.get("ZOHO_CLIENT_SECRET", ""),
+            "grant_type": "refresh_token",
+        }
+        t = await client.post(ZOHO_ACCOUNTS, params=params)
+        body = t.json()
+        if "access_token" not in body:
+            raise ValueError(f"Refresh token refuse : HTTP {t.status_code}")
+        headers = {"Authorization": "Zoho-oauthtoken " + body["access_token"]}
+        rs = await client.get(
+            f"{ZOHO_CRM}/Accounts/search",
+            params={
+                "criteria": "(Tag:equals:distributeurs)",
+                "fields": "Account_Name,Billing_City,Billing_Latitude,Billing_Longitude",
+                "per_page": 10,
+            },
+            headers=headers,
+        )
+        data = rs.json().get("data", []) if rs.status_code == 200 else []
+        return {"status": rs.status_code, "nb": len(data),
+                "corps": rs.text[:200] if rs.status_code != 200 else "",
+                "sample": [{"nom": c.get("Account_Name"), "ville": c.get("Billing_City"),
+                            "lat": c.get("Billing_Latitude")} for c in data[:5]]}

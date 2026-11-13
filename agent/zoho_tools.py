@@ -891,8 +891,8 @@ async def preparer_etude(lead_id: str, variante: str = "societe") -> str:
        gratuit) et ÉCRIT Latitude/Longitude dans la fiche ;
     4. lit TOUS les comptes du CRM géolocalisés pour les SCIERIES proches
        (Industry Scieries, distances en km) et calcule les DISTRIBUTEURS DE GRANULÉS
-       concurrents proches depuis le fichier de référence data/distributeurs_geo.json
-       (49 distributeurs du programme, géolocalisés), distances en km ;
+       concurrents proches via la balise « distributeurs » des Comptes (import Atlas
+       2019, avec repli sur data/distributeurs_geo.json), distances en km ;
     5. renvoie le dossier complet : identité (civilité, prénom, nom, société, SIREN),
        adresse complète, coordonnées GPS, finances Pappers (3 exercices, ou
        « comptes non publiés »), scieries_voisines (max 5), concurrents_proches
@@ -1026,21 +1026,53 @@ async def preparer_etude(lead_id: str, variante: str = "societe") -> str:
                         "distance_km": round(_haversine_km(lat, lon, clat, clon), 1),
                     })
             scieries_voisines = sorted((v for v in voisins if "Scierie" in v["industrie"]), key=lambda x: x["distance_km"])[:5]
-            # concurrents : fichier de référence des distributeurs de granulés (géolocalisés)
+            # concurrents : comptes balisés « distributeurs » (Atlas 2019),
+            # repli sur le fichier de référence data/distributeurs_geo.json
+            concurrents_proches = []
             try:
-                with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "distributeurs_geo.json"), encoding="utf-8") as f:
-                    _distributeurs_ref = json.load(f)
-                concurrents_proches = sorted(
-                    (
-                        {"nom": d.get("nom", ""), "ville": d.get("ville", ""),
-                         "distance_km": round(_haversine_km(lat, lon, d["lat"], d["lon"]), 1)}
-                        for d in _distributeurs_ref
-                        if d.get("lat") and d.get("lon")
-                    ),
-                    key=lambda x: x["distance_km"],
-                )[:5]
+                tpage = 1
+                while tpage <= 5:
+                    rs = await client.get(
+                        f"{ZOHO_CRM}/Accounts/search",
+                        params={
+                            "criteria": "(Tag:equals:distributeurs)",
+                            "fields": "Account_Name,Billing_City,Billing_Latitude,Billing_Longitude",
+                            "per_page": 200, "page": tpage,
+                        },
+                        headers=await _h(),
+                    )
+                    if rs.status_code != 200:
+                        break
+                    tdata = rs.json().get("data", [])
+                    for c in tdata:
+                        clat, clon = _fl(c.get("Billing_Latitude")), _fl(c.get("Billing_Longitude"))
+                        if clat and clon:
+                            concurrents_proches.append({
+                                "nom": c.get("Account_Name", ""),
+                                "ville": c.get("Billing_City", ""),
+                                "distance_km": round(_haversine_km(lat, lon, clat, clon), 1),
+                            })
+                    if len(tdata) < 200:
+                        break
+                    tpage += 1
             except Exception:
-                concurrents_proches = []
+                pass
+            if len(concurrents_proches) < 3:
+                try:
+                    with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "distributeurs_geo.json"), encoding="utf-8") as f:
+                        _distributeurs_ref = json.load(f)
+                    concurrents_proches = sorted(
+                        (
+                            {"nom": d.get("nom", ""), "ville": d.get("ville", ""),
+                             "distance_km": round(_haversine_km(lat, lon, d["lat"], d["lon"]), 1)}
+                            for d in _distributeurs_ref
+                            if d.get("lat") and d.get("lon")
+                        ),
+                        key=lambda x: x["distance_km"],
+                    )[:5]
+                except Exception:
+                    pass
+            concurrents_proches = sorted(concurrents_proches, key=lambda x: x["distance_km"])[:5]
 
         manquants = []
         if not siren:
