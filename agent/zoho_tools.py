@@ -642,3 +642,98 @@ async def lister_tags(module: str = "Leads") -> str:
         r.raise_for_status()
         tags = r.json().get("tags", [])
         return json.dumps({"module": module, "tags": [{"name": t.get("name"), "nb_fiches": t.get("count")} for t in tags]}, ensure_ascii=False)
+
+# ---------------------------------------------------------------------------
+# Étude de capacité d'investissement (SylvaGreen Conseils)
+# ---------------------------------------------------------------------------
+ETUDES_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "etudes")
+_VARIANTES_ETUDE = {
+    "societe": ("template_societe.html", 7, 4),
+    "particulier_transmission": ("template_particulier_transmission.html", 9, 6),
+    "particulier": ("template_particulier.html", 7, 4),
+}
+
+
+@agents.tool
+async def generer_etude(lead_id: str, variante: str, destinataire: str, couverture_html: str, pages: str) -> str:
+    """Génère l'étude de capacité d'investissement SylvaGreen Conseils d'un prospect :
+    remplit le gabarit HTML validé (tokens), convertit en PDF A4 sans marges (WeasyPrint),
+    ATTACHE le PDF à la fiche Prospect du lead (remplace une pièce jointe homonyme),
+    ajoute une note dans la Description, puis DÉTRUIT le HTML : seul le PDF existe.
+    À appeler automatiquement juste après creer_prospect, et à chaque demande d'Olivier
+    de mise à jour de l'étude (nouvelles informations apprises au téléphone par ex.).
+    - variante : "societe" (7 chapitres, 4 pages), "particulier_transmission"
+      (9 chapitres, 6 pages) ou "particulier" (7 chapitres, 4 pages).
+    - destinataire : nom de la société OU civilité + prénom + nom du particulier
+      (ex. "M. Jean-Louis DUCLAUX") ; sert aux en-têtes et au nom du fichier :
+      "Étude de capacité d'investissement — {destinataire}.pdf".
+    - couverture_html : bloc identité de la colonne droite de la couverture
+      (société : forme juridique, représentant, adresse, SIREN ; particulier :
+      nom, adresse, SANS SIREN ni forme juridique).
+    - pages : JSON {"1": "<HTML de la page 1>", ...} — contenu des pages de chapitres
+      rédigé selon les règles du prompt.
+    Renvoie JSON {nom_pdf, variante, nb_chapitres, nb_pages, attachment_id, message}."""
+    if variante not in _VARIANTES_ETUDE:
+        return json.dumps({"erreur": f"variante inconnue : {variante}. Valeurs : {list(_VARIANTES_ETUDE)}"}, ensure_ascii=False)
+    gabarit, nb_chapitres, nb_pages = _VARIANTES_ETUDE[variante]
+    chemin = os.path.join(ETUDES_DIR, gabarit)
+    if not os.path.exists(chemin):
+        return json.dumps({"erreur": f"gabarit introuvable : {chemin}"}, ensure_ascii=False)
+    try:
+        corps = json.loads(pages)
+    except Exception as e:
+        return json.dumps({"erreur": f"pages n'est pas un JSON valide : {e}"}, ensure_ascii=False)
+
+    html = open(chemin, encoding="utf-8").read()
+    html = html.replace("{{DATE}}", f"{datetime.now():%d/%m/%Y}")
+    html = html.replace("{{DESTINATAIRE}}", destinataire)
+    html = html.replace("{{COUV_DESTINATAIRE}}", couverture_html)
+    for n in range(1, nb_pages + 1):
+        html = html.replace("{{PAGE%d_BODY}}" % n, corps.get(str(n), ""))
+    if "{{" in html:
+        i = html.index("{{")
+        return json.dumps({"erreur": f"token non substitué près de : {html[i:i+40]!r}"}, ensure_ascii=False)
+    if "None" in html:
+        return json.dumps({"erreur": "valeur None détectée dans le contenu — renseigner ou reformuler"}, ensure_ascii=False)
+    if html.count("<h2>") < nb_chapitres:
+        return json.dumps({"erreur": f"{html.count('<h2>')} chapitres <h2> trouvés, {nb_chapitres} attendus"}, ensure_ascii=False)
+    if html.count("data:image/png;base64") < nb_pages + 1:
+        return json.dumps({"erreur": "logo manquant sur une ou plusieurs feuilles"}, ensure_ascii=False)
+
+    # HTML -> PDF A4 (marges déjà à 0 dans le gabarit), puis HTML détruit
+    import tempfile
+    from weasyprint import HTML as WHTML
+    tmp = tempfile.NamedTemporaryFile(suffix=".pdf", delete=False)
+    tmp.close()
+    WHTML(string=html).write_pdf(tmp.name)
+    pdf = open(tmp.name, "rb").read()
+    os.unlink(tmp.name)  # PDF temporaire local ; la version durable est la pièce jointe Zoho
+    del html  # le HTML ne doit exister nulle part : il vivait uniquement en mémoire
+
+    nom_pdf = f"Étude de capacité d'investissement — {destinataire}.pdf"
+    async with httpx.AsyncClient(timeout=120) as client:
+        # remplace une pièce jointe homonyme (rejouable)
+        ra = await client.get(f"{ZOHO_CRM}/Leads/{lead_id}/Attachments", headers=await _h())
+        if ra.status_code == 200:
+            for att in ra.json().get("data", []):
+                if att.get("File_Name") == nom_pdf:
+                    await client.delete(f"{ZOHO_CRM}/Leads/{lead_id}/Attachments/{att['id']}", headers=await _h())
+        r = await client.post(
+            f"{ZOHO_CRM}/Leads/{lead_id}/Attachments",
+            files={"file": (nom_pdf, pdf, "application/pdf")},
+            headers=await _h(),
+        )
+        if r.status_code >= 400:
+            return json.dumps({"erreur": f"téléversement échoué : {r.status_code} {r.text[:200]}"}, ensure_ascii=False)
+        data = r.json()["data"][0]
+        if data.get("status") != "success":
+            return json.dumps({"erreur": data}, ensure_ascii=False)
+        # note dans la Description
+        rd = await client.get(f"{ZOHO_CRM}/Leads/{lead_id}", params={"fields": "Description"}, headers=await _h())
+        desc = (rd.json().get("data", [{}])[0].get("Description") or "") if rd.status_code == 200 else ""
+        note = f"[{datetime.now():%d/%m/%Y}] Agent : Étude de capacité d'investissement SylvaGreen Conseils ({nom_pdf} joint)"
+        await client.put(f"{ZOHO_CRM}/Leads", json={"data": [{"id": lead_id, "Description": (desc + "\n" if desc else "") + note}]}, headers=await _h())
+        return json.dumps(
+            {"nom_pdf": nom_pdf, "variante": variante, "nb_chapitres": nb_chapitres, "nb_pages": nb_pages, "attachment_id": data.get("details", {}).get("id"), "message": "Étude générée et jointe à la fiche (HTML détruit)"},
+            ensure_ascii=False,
+        )

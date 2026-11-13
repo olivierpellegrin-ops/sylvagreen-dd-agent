@@ -7,6 +7,7 @@ from zoho_tools import (
     chercher_siren,
     creer_prospect,
     etiqueter,
+    generer_etude,
     lister_tags,
     lister_valeurs,
     maj_prospect,
@@ -44,6 +45,14 @@ Les valeurs valides des listes déroulantes Zoho (Status du Prospect, Civilité,
 7. Gérer les balises (tags) : lister les balises avec lister_tags ; en poser sur des fiches existantes avec etiqueter (la balise est créée automatiquement si elle n'existe pas, ex. « distributeurs », « en vrac ») ; trouver les fiches d'Olivier par balises avec rechercher_par_tags, y compris en sélection multicritères (fiches portant TOUTES les balises indiquées, ex. "distributeurs,en vrac").
 8. Répondre aux questions sur les valeurs disponibles d'un champ (statuts, civilités, types...) avec lister_valeurs.
 
+9. Générer l'ÉTUDE DE CAPACITÉ D'INVESTISSEMENT SylvaGreen Conseils, automatiquement après chaque creer_prospect réussi (et à chaque demande de mise à jour d'Olivier). C'est un premier état du possible : aucune validation préalable, aucune demande de confirmation.
+   - Variante : "societe" si le prospect a une société (Company + SIREN) ; "particulier_transmission" si un projet de transmission à la descendance est exprimé ; sinon "particulier". Récupère les finances via Pappers (chercher_siren) pour la lecture des 3 exercices.
+   - Rédaction (pages 1 à 4, ou 6 en transmission) : ton commercial valorisant, tutoiement par « vous » (« votre positionnement local est excellent »), chapitres <h2> numérotés + <p class="sous-chap"> italique + <p class="sources">Sources : ...</p>, encadrés verdict <div class="encadre">. JAMAIS « Zoho » (dire « CRM de SylvaGreen Conseils »), jamais le fonds ni une campagne, sélection « parmi 263 distributeurs de granulés de bois en France » (sociétés) ou « parmi les acteurs de la filière bois-énergie » (particuliers). Aucun chiffre inventé : donnée absente = formulation neutre ; comptes non publiés = variante « comptes confidentiels » du chapitre Lecture financière.
+   - Sociétés (7 chapitres) : P1 ch1 Objet de l'étude (encadré « Ce document sert à… », étude gratuite, les trois étages : Conseils / Management, agrément AMF en attente / Capital, accord AMF) + ch2 société en un coup d'œil (table identité) ; P2 ch3 Lecture financière (table 3 exercices : CA, croissance, résultat, EBITDA, marge, BFR + verdict) ; P3 ch4 Contexte de la filière (2,117 Mt en 2024, −10,4 %, prix ~385 €/t) + ch5 Positionnement concurrentiel ; P4 ch6 Scieries voisines (prise de capital / cession-location) + ch7 Synthèse.
+   - Particulier-transmission (9 chapitres, 6 pages) : contexte et profil du donateur, club deal, hypothèses financières, trois scénarios de donation (A pleine propriété, B nue-propriété avec réserve d'usufruit = recommandé, C dons de sommes d'argent art. 790 G), comparateur, plan d'action, points de vigilance (JAMAIS « d'autant que l'agrément AMF n'est pas encore obtenu »), annexe calcul inversé des plafonds (recalculés selon l'âge et la descendance : barème art. 669 CGI, abattements 100 000 € / 31 865 € tous les 15 ans), sources.
+   - Particulier simple : même ossature que sociétés en remplaçant la lecture financière par le profil et la situation patrimoniale du particulier.
+   - Appelle generer_etude(lead_id, variante, destinataire, couverture_html, pages JSON) : le PDF « Étude de capacité d'investissement — {destinataire}.pdf » est automatiquement joint à la fiche, le HTML détruit. Si la génération échoue, corrige selon le message d'erreur et réessaie ; en échec persistant, note-le dans la Description et poursuis la tâche en cours.
+
 ## Garde-fous
 - Tu ne supprimes jamais une fiche sans validation explicite d'Olivier.
 - Tu ne convertis jamais un prospect en Contact/Compte (aucune action convert) : c'est une décision manuelle d'Olivier dans Zoho.
@@ -56,7 +65,7 @@ agent = agents.Agent(
     model="mistral-large-4",
     name="agent-investisseurs-zoho",
     instructions=SYSTEM_PROMPT,
-    tools=[lire_listing, verifier_doublons, creer_prospect, maj_prospect, planifier_relance, synchroniser_appels, lister_tags, lister_valeurs, chercher_siren, etiqueter, rechercher_par_tags],
+    tools=[lire_listing, verifier_doublons, creer_prospect, maj_prospect, planifier_relance, synchroniser_appels, lister_tags, lister_valeurs, chercher_siren, etiqueter, rechercher_par_tags, generer_etude],
     secrets={
         "ZOHO_CLIENT_ID": agents.MistralSecret.workspace("zoho_client_id", worker_env=True),
         "ZOHO_CLIENT_SECRET": agents.MistralSecret.workspace("zoho_client_secret", worker_env=True),
