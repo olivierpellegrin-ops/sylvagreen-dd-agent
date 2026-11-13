@@ -1,4 +1,4 @@
-"""Activite de diagnostic Zoho Leads/search."""
+"""Activites de diagnostic : recherche Zoho + rendu WeasyPrint."""
 
 import os
 
@@ -36,13 +36,8 @@ async def tester_criteres(requete: str) -> dict:
         tests: dict[str, str] = {
             "first_starts": f"(First_Name:starts_with:{mot1})",
             "last_starts": f"(Last_Name:starts_with:{mot2 or mot1})",
-            "last_starts_avec_espace": f"(Last_Name:starts_with:{requete})",
             "or_chain": or_chain,
-            "last_contains": f"(Last_Name:contains:{mot2 or mot1})",
-            "full_name_starts": f"(Full_Name:starts_with:{mot1})",
-            "full_name_contains": f"(Full_Name:contains:{mot2 or mot1})",
             "company_starts": f"(Company:starts_with:{mot2 or mot1})",
-            "company_contains": f"(Company:contains:{mot2 or mot1})",
         }
         resultats = {}
         for nom, crit in tests.items():
@@ -55,7 +50,6 @@ async def tester_criteres(requete: str) -> dict:
                 if r.status_code == 204:
                     resultats[nom] = {"http": 204, "nb": 0, "criteria": crit}
                 else:
-                    corps = r.text[:400]
                     try:
                         data = r.json().get("data", [])
                     except Exception:
@@ -64,12 +58,50 @@ async def tester_criteres(requete: str) -> dict:
                         "http": r.status_code,
                         "criteria": crit,
                         "nb": len(data),
-                        "fiches": [
-                            {k: d.get(k) for k in ("id", "Full_Name", "Company", "Email") if d.get(k)}
-                            for d in data[:5]
-                        ],
-                        "corps_brut": corps if r.status_code != 200 else "",
+                        "corps_brut": r.text[:300] if r.status_code != 200 else "",
                     }
             except Exception as e:
                 resultats[nom] = {"criteria": crit, "erreur": str(e)[:300]}
         return {"requete": requete, "mots": mots, "resultats": resultats}
+
+
+@workflows.activity()
+async def tester_weasy(variante: str = "societe") -> dict:
+    """Rend le gabarit d'etude (logo + tokens remplis, contenu minimal) en PDF.
+    Rapporte la version WeasyPrint et l'erreur exacte eventuelle."""
+    import traceback
+
+    import weasyprint
+
+    base = "/app/agent/etudes"
+    gabarit = {"societe": "template_societe.html", "particulier": "template_particulier.html",
+               "particulier_transmission": "template_particulier_transmission.html"}.get(variante, "template_societe.html")
+    chemin = os.path.join(base, gabarit)
+    if not os.path.exists(chemin):
+        return {"erreur": f"gabarit introuvable : {chemin}", "cwd": os.getcwd(), "listing": os.listdir("/app")[:30]}
+    html = open(chemin, encoding="utf-8").read()
+    logo = "".join(open(os.path.join(base, "logo_base64.txt"), encoding="utf-8").read().split())
+    html = html.replace("{{LOGO}}", "data:image/png;base64," + logo)
+    html = html.replace("{{DATE}}", "13/11/2026").replace("{{DESTINATAIRE}}", "DE SLOOVERE L")
+    html = html.replace("{{COUV_DESTINATAIRE}}", "<p>DE SLOOVERE L</p><p>1068 rue des Fèves</p><p>59226 Lecelles</p>")
+    for n in range(1, 7):
+        token = "{{PAGE%d_BODY}}" % n
+        if token in html:
+            html = html.replace(token, "<h2>%d. Chapitre de test</h2><p>Contenu minimal de test.</p>" % n)
+    try:
+        pdf = weasyprint.HTML(string=html).write_pdf()
+        return {
+            "weasyprint": weasyprint.__version__,
+            "gabarit": gabarit,
+            "nb_h2": html.count("<h2>"),
+            "taille_pdf": len(pdf),
+            "succes": True,
+        }
+    except Exception as e:
+        return {
+            "weasyprint": weasyprint.__version__,
+            "gabarit": gabarit,
+            "succes": False,
+            "erreur": f"{type(e).__name__}: {e}",
+            "traceback": traceback.format_exc()[-600:],
+        }
