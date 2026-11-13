@@ -6,7 +6,7 @@ import mistralai.workflows as workflows
 from mistralai.workflows import workflow
 
 with workflow.unsafe.imports_passed_through():
-    from .test_activities import sonder_concurrents
+    from .test_activities import sonder_recents
 
 
 @workflows.workflow.define(
