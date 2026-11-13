@@ -762,6 +762,7 @@ def _mots_requete(requete: str) -> list:
     return list(dict.fromkeys(mots))[:4]
 
 
+@agents.tool(annotations=agents.ToolAnnotations(read_only_hint=True))
 async def chercher_prospect(requete: str) -> str:
     """Retrouve une fiche Prospect (Lead) EXISTANTE à partir d'une demande d'Olivier,
     qui désigne ses prospects par prénom + nom (« Julien de Sloovere ») ou par société
