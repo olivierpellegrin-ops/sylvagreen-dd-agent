@@ -685,6 +685,13 @@ async def generer_etude(lead_id: str, variante: str, destinataire: str, couvertu
         return json.dumps({"erreur": f"pages n'est pas un JSON valide : {e}"}, ensure_ascii=False)
 
     html = open(chemin, encoding="utf-8").read()
+    logo_path = os.path.join(ETUDES_DIR, "logo_base64.txt")
+    if not os.path.exists(logo_path):
+        return json.dumps({"erreur": f"logo introuvable : {logo_path}"}, ensure_ascii=False)
+    logo = "".join(open(logo_path, encoding="utf-8").read().split())
+    if html.count("{{LOGO}}") < nb_pages + 1:
+        return json.dumps({"erreur": "logo manquant sur une ou plusieurs feuilles"}, ensure_ascii=False)
+    html = html.replace("{{LOGO}}", "data:image/png;base64," + logo)
     html = html.replace("{{DATE}}", f"{datetime.now():%d/%m/%Y}")
     html = html.replace("{{DESTINATAIRE}}", destinataire)
     html = html.replace("{{COUV_DESTINATAIRE}}", couverture_html)
@@ -697,8 +704,6 @@ async def generer_etude(lead_id: str, variante: str, destinataire: str, couvertu
         return json.dumps({"erreur": "valeur None détectée dans le contenu — renseigner ou reformuler"}, ensure_ascii=False)
     if html.count("<h2>") < nb_chapitres:
         return json.dumps({"erreur": f"{html.count('<h2>')} chapitres <h2> trouvés, {nb_chapitres} attendus"}, ensure_ascii=False)
-    if html.count("data:image/png;base64") < nb_pages + 1:
-        return json.dumps({"erreur": "logo manquant sur une ou plusieurs feuilles"}, ensure_ascii=False)
 
     # HTML -> PDF A4 (marges déjà à 0 dans le gabarit), puis HTML détruit
     import tempfile
