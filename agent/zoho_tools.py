@@ -209,8 +209,9 @@ def _salutation(civilite: str) -> str:
 async def chercher_siren(nom_societe: str, ville: str = "", code_postal: str = "") -> str:
     """Recherche une société dans la base Pappers (registre national des entreprises)
     et renvoie jusqu'à 5 candidats : raison sociale, SIREN, ville, code postal, rue du
-    siège, état (Actif, etc.) et téléphone standard de la société quand il est public
-    (le numéro manquant est récupéré via la fiche entreprise Pappers). À utiliser pour
+    siège, état (Actif, etc.) et téléphone si présent dans les résultats (rare : le registre
+    national ne publie pas les téléphones des sociétés, ne PAS compter dessus).
+    À utiliser pour
     renseigner le champ SIREN d'un prospect dont la société est connue mais le SIREN
     absent du listing, via maj_prospect (paramètre siren) ou creer_prospect
     (paramètre siren_lie) ; sert AUSSI à trouver la ligne standard de la société quand
@@ -240,24 +241,6 @@ async def chercher_siren(nom_societe: str, ville: str = "", code_postal: str = "
             if not isinstance(etat, str):
                 etat = (etat or {}).get("etat")
             tel = siege.get("telephone") or e.get("telephone")
-            if not tel:
-                # complément via la fiche entreprise Pappers (téléphone standard)
-                try:
-                    re = await client.get(
-                        f"{PAPPERS_API}/entreprise",
-                        params={"siren": e.get("siren"), "api_token": os.environ.get("PAPPERS_API_KEY", "")},
-                    )
-                    if re.status_code == 200:
-                        ent = re.json()
-                        esiege = ent.get("siege") or {}
-                        tel = (
-                            ent.get("telephone")
-                            or esiege.get("telephone")
-                            or ent.get("telephone_2")
-                            or esiege.get("telephone_2")
-                        )
-                except Exception:
-                    tel = tel
             candidats.append(
                 {
                     "raison_sociale": e.get("nom_entreprise"),
