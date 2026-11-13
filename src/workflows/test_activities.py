@@ -284,29 +284,46 @@ async def sonder_recents() -> dict:
 
 @workflows.activity()
 async def sonder_pappers_concurrents() -> dict:
-    """Test Pappers /recherche geolocalise : concurrents autour de De Sloovere."""
+    """Test Pappers : api_token vs api_key, geo vs siren."""
     async with httpx.AsyncClient(timeout=120) as client:
-        base = {"api_key": os.environ.get("PAPPERS_API_KEY", "")}
+        key = os.environ.get("PAPPERS_API_KEY", "")
+        if not key:
+            return {"erreur": "PAPPERS_API_KEY absente de lenv"}
+        base_t = {"api_token": key}
+        base_k = {"api_key": key}
 
-        # essai 1 : latitude/longitude/rayon + activites NAF 4673A (commerce de gros de combustibles)
-        p1 = dict(base)
+        # essai 1 : geo avec api_token, activites 46.73A
+        p1 = dict(base_t)
         p1.update({"latitude": 50.476343, "longitude": 3.401422, "rayon": 60,
                    "activites": "46.73A", "per_page": 10})
         r1 = await client.get("https://api.pappers.fr/v2/recherche", params=p1)
 
-        # essai 2 : q textuel granulés + departement
-        p2 = dict(base)
-        p2.update({"q": "granulés bois", "departement": "59", "per_page": 10})
+        # essai 2 : geo api_token + q granules
+        p2 = dict(base_t)
+        p2.update({"latitude": 50.476343, "longitude": 3.401422, "rayon": 60,
+                   "q": "granul\u00e9", "per_page": 10})
         r2 = await client.get("https://api.pappers.fr/v2/recherche", params=p2)
+
+        # essai 3 : siren avec api_token
+        p3 = dict(base_t)
+        p3.update({"siren": "840129175"})
+        r3 = await client.get("https://api.pappers.fr/v2/recherche", params=p3)
+
+        # essai 4 : siren avec api_key (ancien comportement)
+        p4 = dict(base_k)
+        p4.update({"siren": "840129175"})
+        r4 = await client.get("https://api.pappers.fr/v2/recherche", params=p4)
 
         def extraire(r):
             if r.status_code != 200:
-                return {"status": r.status_code, "corps": r.text[:200]}
-            data = r.json().get("resultats", [])
-            return {"status": 200, "nb_total": r.json().get("nb_entreprises_total"),
+                return {"status": r.status_code, "corps": r.text[:150]}
+            j = r.json()
+            data = j.get("resultats", [])
+            return {"status": 200, "nb_total": j.get("nb_entreprises_total"),
                     "noms": [{"nom": e.get("nom_entreprise"), "ville": (e.get("siege") or {}).get("ville"),
                               "naf": e.get("libelle_activite_principale"),
                               "lat": (e.get("siege") or {}).get("latitude"),
-                              "lon": (e.get("siege") or {}).get("longitude")} for e in data]}
+                              "lon": (e.get("siege") or {}).get("longitude")} for e in data[:10]]}
 
-        return {"essai_4673A_geo": extraire(r1), "essai_granules_59": extraire(r2)}
+        return {"geo_4673A_token": extraire(r1), "geo_granule_token": extraire(r2),
+                "siren_token": extraire(r3), "siren_ancien_apikey": extraire(r4)}
