@@ -208,38 +208,94 @@ def _salutation(civilite: str) -> str:
 @agents.tool(annotations=agents.ToolAnnotations(read_only_hint=True))
 async def chercher_siren(nom_societe: str, ville: str = "", code_postal: str = "") -> str:
     """Recherche une société dans la base Pappers (registre national des entreprises)
-    et renvoie jusqu'à 5 candidats : raison sociale, SIREN, ville et code postal du
-    siège, état (Actif, etc.). À utiliser pour renseigner le champ SIREN d'un prospect
-    dont la société est connue mais le SIREN absent du listing, via maj_prospect
-    (paramètre siren) ou creer_prospect (paramètre siren_lie). Si plusieurs candidats
-    se valent, présente-les à Olivier et attends son choix. Lecture seule, hors Zoho."""
+    et renvoie jusqu'à 5 candidats : raison sociale, SIREN, ville, code postal, rue du
+    siège, état (Actif, etc.) et téléphone standard de la société quand il est public
+    (le numéro manquant est récupéré via la fiche entreprise Pappers). À utiliser pour
+    renseigner le champ SIREN d'un prospect dont la société est connue mais le SIREN
+    absent du listing, via maj_prospect (paramètre siren) ou creer_prospect
+    (paramètre siren_lie) ; sert AUSSI à trouver la ligne standard de la société quand
+    le listing n'a aucun téléphone. Si plusieurs candidats se valent, présente-les à
+    Olivier et attends son choix. Si Pappers échoue ou ne renvoie rien, repli
+    automatique sur l'API publique recherche-entreprises.api.gouv.fr (SIREN/adresse,
+    sans téléphone). Lecture seule, hors Zoho."""
     params = {"q": nom_societe, "per_page": 5}
     if ville:
         params["ville"] = ville
     if code_postal:
         params["code_postal"] = code_postal
-    async with httpx.AsyncClient(timeout=30) as client:
-        r = await client.get(
-            f"{PAPPERS_API}/recherche",
-            params={**params, "api_token": os.environ.get("PAPPERS_API_KEY", "")},
-        )
-        r.raise_for_status()
-        resultats = r.json().get("resultats", [])
     candidats = []
-    for e in resultats[:5]:
-        siege = e.get("siege") or {}
-        etat = e.get("etat")
-        if not isinstance(etat, str):
-            etat = (etat or {}).get("etat")
-        candidats.append(
-            {
-                "raison_sociale": e.get("nom_entreprise"),
-                "siren": e.get("siren"),
-                "ville_siege": siege.get("ville"),
-                "cp_siege": siege.get("code_postal"),
-                "etat": etat,
-            }
-        )
+    async with httpx.AsyncClient(timeout=30) as client:
+        try:
+            r = await client.get(
+                f"{PAPPERS_API}/recherche",
+                params={**params, "api_token": os.environ.get("PAPPERS_API_KEY", "")},
+            )
+            r.raise_for_status()
+            resultats = r.json().get("resultats", [])
+        except Exception:
+            resultats = []
+        for e in resultats[:5]:
+            siege = e.get("siege") or {}
+            etat = e.get("etat")
+            if not isinstance(etat, str):
+                etat = (etat or {}).get("etat")
+            tel = siege.get("telephone") or e.get("telephone")
+            if not tel:
+                # complément via la fiche entreprise Pappers (téléphone standard)
+                try:
+                    re = await client.get(
+                        f"{PAPPERS_API}/entreprise",
+                        params={"siren": e.get("siren"), "api_token": os.environ.get("PAPPERS_API_KEY", "")},
+                    )
+                    if re.status_code == 200:
+                        ent = re.json()
+                        esiege = ent.get("siege") or {}
+                        tel = (
+                            ent.get("telephone")
+                            or esiege.get("telephone")
+                            or ent.get("telephone_2")
+                            or esiege.get("telephone_2")
+                        )
+                except Exception:
+                    tel = tel
+            candidats.append(
+                {
+                    "raison_sociale": e.get("nom_entreprise"),
+                    "siren": e.get("siren"),
+                    "ville_siege": siege.get("ville"),
+                    "cp_siege": siege.get("code_postal"),
+                    "rue_siege": siege.get("adresse") or (siege.get("adresse_ligne_1") if isinstance(siege.get("adresse_ligne_1"), str) else None),
+                    "etat": etat,
+                    "telephone_standard": tel,
+                    "source": "pappers",
+                }
+            )
+    if not candidats:
+        # Repli public sans clé : recherche-entreprises.api.gouv.fr (pas de téléphone)
+        try:
+            async with httpx.AsyncClient(timeout=30) as client:
+                rp = {"q": nom_societe, "per_page": 5}
+                if code_postal:
+                    rp["code_postal"] = code_postal
+                rg = await client.get("https://recherche-entreprises.api.gouv.fr/search", params=rp)
+                rg.raise_for_status()
+                for res in (rg.json().get("resultats") or [])[:5]:
+                    siege = res.get("siege") or {}
+                    adr = siege.get("adresse") or {}
+                    candidats.append(
+                        {
+                            "raison_sociale": res.get("nom_complet"),
+                            "siren": res.get("siren"),
+                            "ville_siege": (siege.get("libelle_commune") or {}).get("value") if isinstance(siege.get("libelle_commune"), dict) else siege.get("libelle_commune"),
+                            "cp_siege": (siege.get("code_postal") or {}).get("value") if isinstance(siege.get("code_postal"), dict) else siege.get("code_postal"),
+                            "rue_siege": adr.get("l1") or adr.get("l2") if isinstance(adr, dict) else None,
+                            "etat": "Actif" if res.get("etat_administratif") == "A" else res.get("etat_administratif"),
+                            "telephone_standard": None,
+                            "source": "api.gouv (repli, sans téléphone)",
+                        }
+                    )
+        except Exception:
+            candidats = []
     return json.dumps({"recherche": nom_societe, "candidats": candidats}, ensure_ascii=False)
 
 
