@@ -3,6 +3,7 @@
 import json
 import os
 import re
+import time
 import unicodedata
 from datetime import datetime
 
@@ -21,6 +22,7 @@ PIPELINE = "Pipeline Investisseurs"
 # T_l_phone_E164 = numéro de référence E164 (le portable en priorité).
 
 _access_token = None
+_token_ts: float = 0.0
 _picklist_cache: dict = {}
 
 
@@ -38,8 +40,11 @@ def _norm_phone(p: str) -> str:
 
 
 async def _token() -> str:
-    global _access_token
-    if _access_token:
+    """Access token Zoho, mis en cache max ~50 min (les tokens expirent a 1 h).
+    Un cache sans duree de vie faisait echouer toutes les requetes en 401
+    INVALID_TOKEN apres la premiere heure d'une session longue."""
+    global _access_token, _token_ts
+    if _access_token and (time.time() - _token_ts) < 3000:
         return _access_token
     async with httpx.AsyncClient(timeout=30) as client:
         r = await client.post(
@@ -55,6 +60,7 @@ async def _token() -> str:
         if "access_token" not in body:
             raise RuntimeError(f"Token Zoho refuse : {body}")
         _access_token = body["access_token"]
+        _token_ts = time.time()
         return _access_token
 
 
