@@ -294,6 +294,7 @@ async def maj_prospect(
     civilite: str = "",
     statut_prospect: str = "",
     note: str = "",
+    montant: str = "",
     email: str = "",
     telephone: str = "",
     portable: str = "",
@@ -314,8 +315,11 @@ async def maj_prospect(
     (Street), code_postal (Zip_Code), region (State),
     SIREN de la société liée (siren, à obtenir via chercher_siren si absent du listing),
     type d'investisseur, source détaillée. Le champ Téléphone E164 est recalculé depuis
-    le portable si fourni, sinon le téléphone. note : texte ajouté en fin de Description
-    au format [JJ/MM/AAAA] Agent : note. Renvoie JSON {lead_id, modifie: [champs]}."""
+    le portable si fourni, sinon le téléphone. montant : montant d'investissement envisagé
+    par le prospect (€, net de frais et commissions), consigné dans la Description au
+    format « Montant d'investissement envisagé : X € » — c'est la mémoire du montant
+    jusqu'à la conversion en affaire (champ Amount). note : texte ajouté en fin de
+    Description au format [JJ/MM/AAAA] Agent : note. Renvoie JSON {lead_id, modifie: [champs]}."""
     async with httpx.AsyncClient(timeout=60) as client:
         champs: dict = {"id": lead_id}
         modifies = []
@@ -382,6 +386,9 @@ async def maj_prospect(
             api, _ = await _resolve(client, source_detaillee, "Leads", "Source_d_taill_e", LEADS_LAYOUT_ID)
             champs["Source_d_taill_e"] = api or source_detaillee
             modifies.append("Source détaillée")
+        if montant:
+            montant = montant.strip()
+            note = (note + " " if note else "") + f"Montant d'investissement envisagé : {montant} €"
         if note:
             r = await client.get(f"{ZOHO_CRM}/Leads/{lead_id}", params={"fields": "Description"}, headers=await _h())
             desc = (r.json().get("data", [{}])[0].get("Description") or "") if r.status_code == 200 else ""
@@ -413,13 +420,15 @@ async def creer_prospect(
     siren_lie: str = "",
     type_investisseur: str = "Personne Physique",
     source_detaillee: str = "Listing",
+    montant: str = "",
     tag_campagne: str = "",
 ) -> str:
     """Crée le prospect investisseur dans Zoho : lead (disposition Investisseurs) avec les
     champs de dédoublonnage (Nom_normalis, T_l_phone_E164, SIREN), la Civilité (Salutation :
-    M., Mme, Mlle... résolue automatiquement en valeur API valide du CRM). AUCUNE conversion :
-    la fiche reste dans le module Prospects, la conversion en Contact/Compte est
-    une décision manuelle d'Olivier dans Zoho. Distinction
+    M., Mme, Mlle... résolue automatiquement en valeur API valide du CRM). AUCUNE
+    conversion automatique : la fiche reste dans le module Prospects ; la conversion en
+    Contact/Compte/Affaire se fait UNIQUEMENT sur demande explicite d'Olivier, via
+    convertir_prospect. Distinction
     téléphonique : telephone = ligne fixe (champ Téléphone), portable = smartphone (champ
     Portable) ; le champ Téléphone E164 vaut le portable si fourni, sinon le fixe.
     À appeler uniquement si verifier_doublons renvoie aucun_match. Si la société est
@@ -452,7 +461,8 @@ async def creer_prospect(
                 "SIREN": (re.sub(r"\D", "", siren_lie) or None) if siren_lie else None,
                 "Type_d_investisseur": type_api or type_investisseur,
                 "Source_d_taill_e": source_api or source_detaillee,
-                "Description": f"[{datetime.now():%d/%m/%Y}] Agent : création prospect (source : {source_detaillee})",
+                "Description": f"[{datetime.now():%d/%m/%Y}] Agent : création prospect (source : {source_detaillee})"
+                + (f" — Montant d'investissement envisagé : {montant.strip()} €" if montant.strip() else ""),
             }
         ],
         "duplicate_check_fields": ["Nom_normalis", "T_l_phone_E164"],
@@ -661,7 +671,7 @@ _VARIANTES_ETUDE = {
 
 
 @agents.tool
-async def generer_etude(lead_id: str, variante: str, destinataire: str, couverture_html: str, pages: str) -> str:
+async def generer_etude(lead_id: str, variante: str, destinataire: str, couverture_html: str, pages: str, montant: str = "") -> str:
     """Génère l'étude de capacité d'investissement SylvaGreen Conseils d'un prospect :
     remplit le gabarit HTML validé (tokens), convertit en PDF A4 sans marges (WeasyPrint),
     ATTACHE le PDF à la fiche Prospect du lead (remplace une pièce jointe homonyme),
@@ -678,9 +688,21 @@ async def generer_etude(lead_id: str, variante: str, destinataire: str, couvertu
       nom, adresse, SANS SIREN ni forme juridique).
     - pages : JSON {"1": "<HTML de la page 1>", ...} — contenu des pages de chapitres
       rédigé selon les règles du prompt.
-    Renvoie JSON {nom_pdf, variante, nb_chapitres, nb_pages, attachment_id, message}."""
+    - montant : montant d'investissement envisagé par le prospect (€, net de frais et
+      commissions), DONNÉ PAR OLIVIER. S'il est fourni : pour les variantes
+      « particulier », il est ajouté automatiquement à la couverture (bloc identité)
+      sous la forme « Montant d'investissement envisagé : X € », il nourrit les
+      scénarios des pages (c'est LUI qui fait varier les plafonds et scénarios de
+      donation de la variante particulier-transmission), et il est consigné dans la
+      note de Description de la fiche. Il ne remplace JAMAIS un montant déjà écrit par
+      la rédaction dans les pages elles-mêmes.
+    Renvoie JSON {nom_pdf, variante, nb_chapitres, nb_pages, attachment_id, montant, message}."""
     if variante not in _VARIANTES_ETUDE:
         return json.dumps({"erreur": f"variante inconnue : {variante}. Valeurs : {list(_VARIANTES_ETUDE)}"}, ensure_ascii=False)
+    montant = (montant or "").strip()
+    if montant and variante != "societe":
+        # bloc identité de la couverture : ligne montant en cohérence avec le bloc
+        couverture_html = couverture_html.rstrip() + f'\n<p>Montant d\u2019investissement envisagé : {montant} €</p>'
     gabarit, nb_chapitres, nb_pages = _VARIANTES_ETUDE[variante]
     chemin = os.path.join(ETUDES_DIR, gabarit)
     if not os.path.exists(chemin):
@@ -756,9 +778,11 @@ async def generer_etude(lead_id: str, variante: str, destinataire: str, couvertu
         rd = await client.get(f"{ZOHO_CRM}/Leads/{lead_id}", params={"fields": "Description"}, headers=await _h())
         desc = (rd.json().get("data", [{}])[0].get("Description") or "") if rd.status_code == 200 else ""
         note = f"[{datetime.now():%d/%m/%Y}] Agent : Étude de capacité d'investissement SylvaGreen Conseils ({nom_pdf} joint)"
+        if montant:
+            note += f" — Montant d'investissement envisagé : {montant} €"
         await client.put(f"{ZOHO_CRM}/Leads", json={"data": [{"id": lead_id, "Description": (desc + "\n" if desc else "") + note}]}, headers=await _h())
         return json.dumps(
-            {"nom_pdf": nom_pdf, "variante": variante, "nb_chapitres": nb_chapitres, "nb_pages": nb_pages, "attachment_id": data.get("details", {}).get("id"), "message": "Étude générée et jointe à la fiche (HTML détruit)"},
+            {"nom_pdf": nom_pdf, "variante": variante, "nb_chapitres": nb_chapitres, "nb_pages": nb_pages, "attachment_id": data.get("details", {}).get("id"), "montant": montant or None, "message": "Étude générée et jointe à la fiche (HTML détruit)"},
             ensure_ascii=False,
         )
 
@@ -1146,3 +1170,69 @@ async def preparer_etude(lead_id: str, variante: str = "societe") -> str:
             "donnees_manquantes": manquants,
             "notes": notes,
         }, ensure_ascii=False)
+
+
+# ---------------------------------------------------------------------------
+# 15e outil : convertir_prospect — conversion du lead en Contact + Compte +
+# Affaire du Pipeline Investisseurs, UNIQUEMENT sur demande explicite d'Olivier.
+# 16e outil : maj_affaire — montants (net/brut/frais), étapes et dates de l'affaire.
+# ---------------------------------------------------------------------------
+def _montant_float(montant):
+    """Convertit une saisie libre (« 150 000 € », « 150000 », « 150,5 k€ ») en nombre, sinon None."""
+    if montant is None or montant == "":
+        return None
+    s = str(montant).strip().lower().replace("€", "").replace(" ", "").replace("\u00a0", "")
+    k = 1000.0 if s.endswith("k") else 1.0
+    if s.endswith("k"):
+        s = s[:-1]
+    s = re.sub(r"(?<=\d)\.(?=\d{3}(\D|$))", "", s)  # point = séparateur de milliers
+    s = s.replace(",", ".")
+    try:
+        return float(s) * k
+    except ValueError:
+        return None
+
+
+@agents.tool
+async def convertir_prospect(lead_id: str, montant: str = "", etape: str = "Qualification") -> str:
+    """Convertit un prospect (fiche Prospects) en Contact + Compte + Affaire du Pipeline
+    Investisseurs : l'équivalent API du bouton « Convertir » de Zoho. À appeler
+    UNIQUEMENT sur demande explicite d'Olivier (« convertis-moi le prospect X en
+    contact/affaire », « le prospect X est gagnant », « nous avons gagné l'affaire X »),
+    JAMAIS de ta propre initiative ni après un simple creer_prospect. La conversion crée :
+    - un Contact au nom du prospect ;
+    - un Compte « {Prénom Nom} — Investisseur » (personne physique) ;
+    - une affaire « Investissement {Prénom Nom} » dans le Pipeline Investisseurs, à
+      l'étape donnée (défaut « Qualification » ; si Olivier dit « gagnant » / « nous
+      avons gagné l'affaire » sans autre précision, utilise « Souscription »).
+    montant (€ net, hors frais et commissions) alimente le champ Amount de l'affaire ;
+    s'il n'est pas fourni, l'outil relit le dernier « Montant d'investissement envisagé »
+    consigné dans la Description du prospect. étape : libellé affiché dans Zoho
+    (Qualification, Rendez-Vous, Rédaction contrat, Signature, Souscription), résolu
+    automatiquement. Renvoie JSON {lead_id, contact_id, compte_id, deal_id, montant,
+    etape, message} ; la fiche Prospects devient non modifiable après conversion
+    (utiliser maj_affaire ensuite)."""
+    async with httpx.AsyncClient(timeout=60) as client:
+        rl = await client.get(f"{ZOHO_CRM}/Leads/{lead_id}", headers=await _h())
+        if rl.status_code != 200:
+            return json.dumps({"erreur": f"prospect introuvable dans le module Prospects : {lead_id} (déjà converti ?)", "http": rl.status_code}, ensure_ascii=False)
+        lead = rl.json()["data"][0]
+        prenom = (lead.get("First_Name") or "").strip()
+        nom = (lead.get("Last_Name") or "").strip()
+        nom_complet = " ".join(x for x in (prenom, nom) if x) or (lead.get("Company") or "Investisseur")
+        description = lead.get("Description") or ""
+        montant = (montant or "").strip()
+        if not montant:
+            # dernier montant consigné dans la Description (note maj_prospect/generer_etude)
+            trouves = re.findall(r"Montant d[\u2019']investissement envisagé\s*:\s*([0-9][0-9\s.,]*)", description)
+            if trouves:
+                montant = trouves[-1].strip()
+        amount = _montant_float(montant)
+
+        stage_api, valeurs = await _resolve(client, etape or "Qualification", "Deals", "Stage", DEALS_LAYOUT_ID)
+        if not stage_api:
+            libelles = "; ".join(f"{lib} (= {act})" for act, lib in valeurs) or "Qualification, Rendez-Vous, Rédaction contrat, Signature, Souscription"
+            return json.dumps({"erreur": f"étape inconnue : {etape}. Valeurs acceptées : {libelles}"}, ensure_ascii=False)
+
+        deal: dict = {"Deal_Name": f"Investissement {nom_complet}", "Pipeline": PIPELINE, "Stage": stage_api}
+        if amount is not None:
