@@ -946,9 +946,14 @@ async def preparer_etude(lead_id: str, variante: str = "societe") -> str:
     5. renvoie le dossier complet : identité (civilité, prénom, nom, société, SIREN),
        adresse complète, coordonnées GPS, finances Pappers (3 exercices, ou
        « comptes non publiés »), scieries_voisines (max 5), concurrents_proches
-       (max 5), champs encore manquants.
-    La rédaction de l'étude DOIT utiliser ces données (nommer les scieries voisines
-    avec leur distance, citer les concurrents proches par leur nom)."""
+       (max 5 ; VIDE pour la variante particulier_transmission : un donateur n'a
+       pas de paysage concurrentiel, la rédaction n'en fait jamais un chapitre),
+       champs encore manquants.
+    La rédaction de l'étude DOIT utiliser ces données pour les variantes société
+    et particulier simple (nommer les scieries voisines avec leur distance, citer
+    les concurrents proches par leur nom) ; pour la variante particulier_transmission,
+    les scieries servent tout au plus d'écosystème local (une phrase), jamais de
+    chapitre concurrents."""
     async with httpx.AsyncClient(timeout=120) as client:
         rl = await client.get(f"{ZOHO_CRM}/Leads/{lead_id}", headers=await _h())
         if rl.status_code != 200:
@@ -1127,6 +1132,13 @@ async def preparer_etude(lead_id: str, variante: str = "societe") -> str:
                 (c for c in concurrents_proches if not _est_le_prospect(c["nom"], societe_norm)),
                 key=lambda x: x["distance_km"],
             )[:5]
+            if variante == "particulier_transmission":
+                # Étude de transmission d'un DONATEUR particulier : les concurrents
+                # distributeurs de granulés n'ont AUCUN intérêt (pas de paysage
+                # concurrentiel pour un donateur) — non renvoyés, la rédaction n'en
+                # fait jamais un chapitre. Les scieries restent (écosystème filière
+                # bois local, une phrase max dans le chapitre contexte).
+                concurrents_proches = []
 
         manquants = []
         if not siren:
