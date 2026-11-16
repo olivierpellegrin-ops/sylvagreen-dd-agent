@@ -1229,10 +1229,242 @@ async def convertir_prospect(lead_id: str, montant: str = "", etape: str = "Qual
                 montant = trouves[-1].strip()
         amount = _montant_float(montant)
 
-        stage_api, valeurs = await _resolve(client, etape or "Qualification", "Deals", "Stage", DEALS_LAYOUT_ID)
+        stage_api, valeurs = await _resoudre_etape(client, etape or "Qualification")
         if not stage_api:
             libelles = "; ".join(f"{lib} (= {act})" for act, lib in valeurs) or "Qualification, Rendez-Vous, Rédaction contrat, Signature, Souscription"
             return json.dumps({"erreur": f"étape inconnue : {etape}. Valeurs acceptées : {libelles}"}, ensure_ascii=False)
 
         deal: dict = {"Deal_Name": f"Investissement {nom_complet}", "Pipeline": PIPELINE, "Stage": stage_api}
         if amount is not None:
+            deal["Amount"] = amount
+        payload = {
+            "data": [
+                {
+                    "lead_id": lead_id,
+                    "Accounts": {"name": f"{nom_complet} — Investisseur"},
+                    "Contacts": {"First_Name": prenom, "Last_Name": nom, "Salutation": lead.get("Salutation")},
+                    "Deals": deal,
+                    "overwrite": True,
+                }
+            ]
+        }
+        r = await client.post(f"{ZOHO_CRM}/Leads/actions/convert", json=payload, headers=await _h())
+        resultat: dict = {}
+        if r.status_code >= 400:
+            # repli : conversion minimale, puis création manuelle de l'affaire
+            rmin = await client.post(
+                f"{ZOHO_CRM}/Leads/actions/convert",
+                json={"data": [{"lead_id": lead_id, "overwrite": True}]},
+                headers=await _h(),
+            )
+            if rmin.status_code >= 400:
+                return json.dumps({"erreur": f"conversion refusée : {rmin.status_code} {rmin.text[:250]}"}, ensure_ascii=False)
+            resultat = rmin.json()["data"][0]
+        else:
+            resultat = r.json()["data"][0]
+        if resultat.get("status") != "success":
+            return json.dumps({"erreur": resultat}, ensure_ascii=False)
+        details = resultat.get("details", resultat)
+        contact_id = (details.get("Contacts") or {}).get("id") if isinstance(details.get("Contacts"), dict) else None
+        compte_id = (details.get("Accounts") or {}).get("id") if isinstance(details.get("Accounts"), dict) else None
+        deal_id = (details.get("Deals") or {}).get("id") if isinstance(details.get("Deals"), dict) else None
+
+        if not deal_id and contact_id:
+            # l'affaire n'a pas été créée par la conversion : la créer manuellement
+            payload_deal = {
+                "data": [
+                    {
+                        "Layout": {"id": DEALS_LAYOUT_ID},
+                        "Deal_Name": deal["Deal_Name"],
+                        "Pipeline": PIPELINE,
+                        "Stage": stage_api,
+                        "Contact_Name": {"id": contact_id},
+                    }
+                ]
+            }
+            if amount is not None:
+                payload_deal["data"][0]["Amount"] = amount
+            rd = await client.post(f"{ZOHO_CRM}/Deals", json=payload_deal, headers=await _h())
+            if rd.status_code in (200, 201):
+                deal_id = rd.json()["data"][0].get("details", {}).get("id")
+
+        if not deal_id:
+            return json.dumps({"erreur": "conversion réussie mais affaire introuvable : la créer via l'UI Zoho", "contact_id": contact_id, "compte_id": compte_id}, ensure_ascii=False)
+
+        # l'affaire vit dans le Pipeline Investisseurs, RATTACHÉE AU COMPTE
+        # SylvaGreen Capital (toutes les affaires investisseurs y sont rattachées),
+        # avec le type « Investisseur »
+        maj_deal: dict = {}
+        try:
+            sgc = await _search("Accounts", "(Account_Name:starts_with:SylvaGreen Capital)")
+            if sgc:
+                maj_deal["Account_Name"] = {"id": sgc[0].get("id"), "name": sgc[0].get("Account_Name")}
+        except Exception:
+            pass
+        try:
+            type_api, _ = await _resolve(client, "Investisseur", "Deals", "Type", DEALS_LAYOUT_ID)
+            if type_api:
+                maj_deal["Type"] = type_api
+        except Exception:
+            pass
+        rj = await client.get(f"{ZOHO_CRM}/Deals/{deal_id}", params={"fields": "Description"}, headers=await _h())
+        desc = (rj.json().get("data", [{}])[0].get("Description") or "") if rj.status_code == 200 else ""
+        note = f"[{datetime.now():%d/%m/%Y}] Agent : conversion du prospect {nom_complet} en contact + compte + affaire (étape {etape or 'Qualification'})"
+        if montant:
+            note += f" — Montant souscrit net : {montant} €"
+        maj_deal.update({"id": deal_id, "Description": (desc + "\n" if desc else "") + note})
+        await client.put(f"{ZOHO_CRM}/Deals", json={"data": [maj_deal]}, headers=await _h())
+
+        return json.dumps(
+            {
+                "lead_id": lead_id,
+                "contact_id": contact_id,
+                "compte_id": compte_id,
+                "compte_affaire": (maj_deal.get("Account_Name") or {}).get("name") or "(rattachement SylvaGreen Capital non trouvé : vérifier dans l'UI)",
+                "deal_id": deal_id,
+                "montant_net": amount if amount is not None else None,
+                "etape": stage_api,
+                "message": f"Prospect {nom_complet} converti : contact + affaire « Investissement {nom_complet} » rattachée au compte SylvaGreen Capital, Pipeline Investisseurs, étape {etape or 'Qualification'}. La fiche Prospects n'est plus modifiable : utiliser maj_affaire.",
+            },
+            ensure_ascii=False,
+        )
+
+
+# Alias de vocabulaire -> valeur API de l'étape (picklist Stage des Deals). Les étapes
+# standard Zoho ont été ajoutées à la picklist : Olivier dit « chiffrage »,
+# « négociation », « rdv »... et la résolution par libellé exact échouerait.
+_ETAPE_ALIAS = {
+    "qualification": "Qualification",
+    "analyzedesbesoins": "Needs Analysis",
+    "analysedesbesoins": "Needs Analysis",
+    "besoins": "Needs Analysis",
+    "rendezvous": "Rendez-Vous",
+    "rdv": "Rendez-Vous",
+    "propositionchiffrage": "Proposal/Price Quote",
+    "chiffrage": "Proposal/Price Quote",
+    "proposition": "Proposal/Price Quote",
+    "propositioncommerciale": "Value Proposition",
+    "negociation": "Negotiation/Review",
+    "negociationreview": "Negotiation/Review",
+    "redactioncontrat": "Rédaction contrat",
+    "signature": "Signature",
+    "souscription": "Souscription",
+    "gagne": "Closed Won",
+    "gagnesfermes": "Closed Won",
+    "perdu": "Closed Lost",
+    "perdusfermes": "Closed Lost",
+}
+
+
+async def _resoudre_etape(client, saisie: str):
+    """Traduit une étape (libellé, valeur API OU alias du vocabulaire d'Olivier :
+    « chiffrage », « négociation », « rdv »...) en valeur API du picklist Stage des
+    Deals. Renvoie (valeur_api ou None, valeurs_valides)."""
+    saisie = (saisie or "").strip()
+    if not saisie:
+        return "Qualification", []
+    alias = _ETAPE_ALIAS.get(_norm(saisie))
+    return await _resolve(client, alias or saisie, "Deals", "Stage", DEALS_LAYOUT_ID)
+
+
+@agents.tool
+async def maj_affaire(
+    prospect: str = "",
+    deal_id: str = "",
+    montant: str = "",
+    montant_brut: str = "",
+    frais_commissions: str = "",
+    date_signature: str = "",
+    date_reception_fonds: str = "",
+    version_contrat: str = "",
+    etape: str = "",
+    note: str = "",
+) -> str:
+    """Met à jour l'AFFAIRE (Deal) d'un investisseur dans le Pipeline Investisseurs
+    (affaire rattachée au compte SylvaGreen Capital, jamais perdue de vue : une affaire
+    n'est pas systématiquement gagnée, elle suit des étapes). Identifie l'affaire soit
+    par son deal_id, soit par le prénom + nom (ou société) du prospect via le paramètre
+    prospect (l'affaire s'appelle « Investissement {Prénom Nom} »). Champs modifiables
+    (seuls ceux fournis sont changés) : montant = montant souscrit NET hors frais et
+    commissions (champ Amount, toujours le net) ; montant_brut ; frais_commissions ;
+    date_signature (AAAA-MM-JJ, champ Date de signature effective) ;
+    date_reception_fonds (AAAA-MM-JJ) ; version_contrat (ex. « v3 ») ; etape = libellé
+    affiché dans Zoho ou vocabulaire d'Olivier (Qualification, Analyse des besoins,
+    Rendez-Vous / rdv, Chiffrage, Négociation, Rédaction contrat, Signature,
+    Souscription, Gagnés fermés, Perdus fermés), résolu automatiquement — c'est LA
+    façon de faire avancer l'affaire à la demande d'Olivier (« passe l'affaire X en
+    chiffrage », « mets-la en négociation »). note : ajoutée à la Description de
+    l'affaire au format [JJ/MM/AAAA] Agent : note. Vocabulaire : « nous avons gagné
+    l'affaire » / « le prospect est gagnant » = étape Souscription si les fonds nets
+    sont reçus (demande alors le montant net), sinon Signature. Renvoie JSON
+    {deal_id, modifie: [champs]}."""
+    async with httpx.AsyncClient(timeout=60) as client:
+        if not deal_id and not prospect.strip():
+            return json.dumps({"erreur": "donner deal_id ou prospect (prénom + nom)"}, ensure_ascii=False)
+        if not deal_id:
+            mots = _mots_requete(prospect)
+            if not mots:
+                return json.dumps({"erreur": "prospect trop court : prénom + nom ou société"}, ensure_ascii=False)
+            vus: dict = {}
+            for mot in mots:
+                crit = f"((Deal_Name:starts_with:{mot})or(Contact_Name:starts_with:{mot}))"
+                try:
+                    for d in await _search("Deals", crit):
+                        vus.setdefault(str(d.get("id")), d)
+                except Exception:
+                    continue
+            if not vus:
+                return json.dumps({"erreur": "aucune affaire trouvée : le prospect est peut-être encore non converti (convertir_prospect d'abord)"}, ensure_ascii=False)
+            if len(vus) > 1:
+                return json.dumps({"plusieurs_affaires": [{"deal_id": d.get("id"), "nom": d.get("Deal_Name")} for d in vus.values()], "message": "préciser le prospect"}, ensure_ascii=False)
+            deal_id = next(iter(vus))
+
+        champs: dict = {"id": deal_id}
+        modifies = []
+        mnet = _montant_float(montant)
+        if montant:
+            if mnet is None:
+                return json.dumps({"erreur": f"montant illisible : {montant} (ex. 150000 ou « 150 000 € »)"}, ensure_ascii=False)
+            champs["Amount"] = mnet
+            modifies.append("Montant net (Amount)")
+        mbrut = _montant_float(montant_brut)
+        if montant_brut:
+            if mbrut is None:
+                return json.dumps({"erreur": f"montant_brut illisible : {montant_brut}"}, ensure_ascii=False)
+            champs["Montant_brut_souscrit"] = mbrut
+            modifies.append("Montant brut")
+        mfrais = _montant_float(frais_commissions)
+        if frais_commissions:
+            if mfrais is None:
+                return json.dumps({"erreur": f"frais_commissions illisible : {frais_commissions}"}, ensure_ascii=False)
+            champs["Frais_et_commissions"] = mfrais
+            modifies.append("Frais et commissions")
+        if date_signature:
+            champs["Date_de_signature_effective"] = date_signature
+            modifies.append("Date de signature")
+        if date_reception_fonds:
+            champs["Date_de_r_ception_des_fonds"] = date_reception_fonds
+            modifies.append("Date de réception des fonds")
+        if version_contrat:
+            champs["Version_du_contrat_en_cours"] = version_contrat
+            modifies.append("Version du contrat")
+        if etape:
+            api, valeurs = await _resoudre_etape(client, etape)
+            if not api:
+                libelles = "; ".join(f"{lib} (= {act})" for act, lib in valeurs) or "interroger lister_valeurs (module Deals, champ Stage)"
+                return json.dumps({"erreur": f"étape inconnue : {etape}. Valeurs acceptées : {libelles}"}, ensure_ascii=False)
+            champs["Stage"] = api
+            modifies.append("Étape")
+        if note:
+            rj = await client.get(f"{ZOHO_CRM}/Deals/{deal_id}", params={"fields": "Description"}, headers=await _h())
+            desc = (rj.json().get("data", [{}])[0].get("Description") or "") if rj.status_code == 200 else ""
+            champs["Description"] = (desc + "\n" if desc else "") + f"[{datetime.now():%d/%m/%Y}] Agent : {note}"
+            modifies.append("Description")
+        if not modifies:
+            return json.dumps({"erreur": "aucun champ à modifier."}, ensure_ascii=False)
+        r = await client.put(f"{ZOHO_CRM}/Deals", json={"data": [champs]}, headers=await _h())
+        r.raise_for_status()
+        data = r.json()["data"][0]
+        if data.get("status") != "success":
+            return json.dumps({"erreur": data}, ensure_ascii=False)
+        return json.dumps({"deal_id": deal_id, "modifie": modifies}, ensure_ascii=False)
