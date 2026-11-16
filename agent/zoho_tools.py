@@ -685,7 +685,8 @@ async def generer_etude(lead_id: str, variante: str, destinataire: str, couvertu
       "Étude de capacité d'investissement — {destinataire}.pdf".
     - couverture_html : bloc identité de la colonne droite de la couverture
       (société : forme juridique, représentant, adresse, SIREN ; particulier :
-      nom, adresse, SANS SIREN ni forme juridique).
+      nom, adresse, SANS SIREN ni forme juridique, SANS coordonnées GPS
+      (latitude/longitude) : l'adresse postale suffit, jamais de GPS).
     - pages : JSON {"1": "<HTML de la page 1>", ...} — contenu des pages de chapitres
       rédigé selon les règles du prompt.
     - montant : montant d'investissement envisagé par le prospect (€, net de frais et
@@ -944,7 +945,8 @@ async def preparer_etude(lead_id: str, variante: str = "societe") -> str:
        concurrents proches via la balise « distributeurs » des Comptes (import Atlas
        2019, avec repli sur data/distributeurs_geo.json), distances en km ;
     5. renvoie le dossier complet : identité (civilité, prénom, nom, société, SIREN),
-       adresse complète, coordonnées GPS, finances Pappers (3 exercices, ou
+       adresse complète (les coordonnées GPS restent internes : elles servent au
+       calcul des distances mais NE SONT PAS renvoyées, l'étude ne les affiche jamais), finances Pappers (3 exercices, ou
        « comptes non publiés »), scieries_voisines (max 5), concurrents_proches
        (max 5 ; VIDE pour la variante particulier_transmission : un donateur n'a
        pas de paysage concurrentiel, la rédaction n'en fait jamais un chapitre),
@@ -1167,8 +1169,7 @@ async def preparer_etude(lead_id: str, variante: str = "societe") -> str:
                 "code_postal": modifs.get("Zip_Code", zip_),
                 "ville": modifs.get("City", city),
                 "region": lead.get("State", ""),
-                "latitude": lat if geo_ok else None,
-                "longitude": lon if geo_ok else None,
+
             },
             "finances_pappers": [
                 {"chiffre_affaires": f.get("chiffre_affaires"), "resultat_net": f.get("resultat_net"),
