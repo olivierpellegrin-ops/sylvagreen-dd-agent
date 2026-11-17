@@ -967,6 +967,7 @@ async def preparer_etude(lead_id: str, variante: str = "societe") -> str:
         notes: list = []
         finances: list = []
         finances_dispo = None  # None = inconnu, True/False = publiés ou non
+        finances_statut = "inconnu"  # "ok" | "non_publies" | "api_indisponible"
 
         # ---- registre national (Pappers) : UN SEUL appel, pour l'adresse
         # manquante ET les finances ; ne complète QUE les champs vides de la fiche ----
@@ -986,6 +987,7 @@ async def preparer_etude(lead_id: str, variante: str = "societe") -> str:
                         r0 = res[0]
                         finances = (r0.get("finances") or [])[:3]
                         finances_dispo = bool(finances)
+                        finances_statut = "ok" if finances else "non_publies"
                         sie = r0.get("siege") or {}
                         adr_siege = sie.get("adresse")
                         if isinstance(adr_siege, dict):
@@ -1003,8 +1005,10 @@ async def preparer_etude(lead_id: str, variante: str = "societe") -> str:
                         if any(k in modifs for k in ("Street", "Zip_Code", "City")):
                             notes.append("adresse complétée via le registre national des entreprises")
                 elif rp.status_code in (402, 403, 429):
+                    finances_statut = "api_indisponible"
                     notes.append(f"Pappers indisponible (HTTP {rp.status_code}) : adresse/finances non complétées")
             except Exception as e:
+                finances_statut = "api_indisponible"
                 notes.append(f"registre national injoignable : {type(e).__name__}")
 
         # ---- géolocalisation manquante -> api-adresse.data.gouv.fr ----
@@ -1149,7 +1153,9 @@ async def preparer_etude(lead_id: str, variante: str = "societe") -> str:
             manquants.append("adresse (rue)")
         if not geo_ok:
             manquants.append("géolocalisation")
-        if variante == "societe" and finances_dispo is False:
+        if finances_statut == "api_indisponible" and siren:
+            manquants.append("finances Pappers INDISPONIBLES (échec de l'API registre, PAS une absence de publication) : ne pas conclure « comptes non publiés », signaler à Olivier ou relancer preparer_etude plus tard")
+        elif variante == "societe" and finances_dispo is False:
             manquants.append("comptes non publiés au registre -> variante « comptes confidentiels » du chapitre Lecture financière")
 
         return json.dumps({
@@ -1177,6 +1183,7 @@ async def preparer_etude(lead_id: str, variante: str = "societe") -> str:
                 for f in finances
             ] if finances else [],
             "comptes_publies": finances_dispo,
+            "finances_statut": finances_statut,
             "scieries_voisines": scieries_voisines,
             "concurrents_proches": concurrents_proches,
             "fiche_mise_a_jour": {"ok": maj_ok, "champs": sorted(modifs.keys())} if modifs else "aucune mise à jour nécessaire",
