@@ -946,7 +946,7 @@ async def preparer_etude(lead_id: str, variante: str = "societe") -> str:
        2019, avec repli sur data/distributeurs_geo.json), distances en km ;
     5. renvoie le dossier complet : identité (civilité, prénom, nom, société, SIREN),
        adresse complète (les coordonnées GPS restent internes : elles servent au
-       calcul des distances mais NE SONT PAS renvoyées, l'étude ne les affiche jamais), finances Pappers (3 exercices, ou
+       calcul des distances mais NE SONT PAS renvoyées, l'étude ne les affiche jamais), finances Pappers via /entreprise (3 exercices : CA, résultat net, croissance, marge brute, EBITDA, marge EBITDA, BFR, délais clients/fournisseurs, ou
        « comptes non publiés »), scieries_voisines (max 5), concurrents_proches
        (max 5 ; VIDE pour la variante particulier_transmission : un donateur n'a
        pas de paysage concurrentiel, la rédaction n'en fait jamais un chapitre),
@@ -977,33 +977,47 @@ async def preparer_etude(lead_id: str, variante: str = "societe") -> str:
         siren = (lead.get("SIREN") or "").strip()
         if siren:
             try:
+                # /entreprise (et PAS /recherche) : le seul endpoint Pappers qui
+                # renvoie le tableau `finances` (3 derniers exercices, EBITDA,
+                # BFR, délais clients/fournisseurs). /recherche ne donne que le
+                # dernier CA en champs plats et AUCUN tableau finances -> toutes
+                # les études sortaient à tort en « comptes non publiés ».
                 rp = await client.get(
-                    "https://api.pappers.fr/v2/recherche",
+                    "https://api.pappers.fr/v2/entreprise",
                     params={"api_token": os.environ.get("PAPPERS_API_KEY", ""), "siren": siren},
                 )
                 if rp.status_code == 200:
-                    res = rp.json().get("resultats") or []
-                    if res:
-                        r0 = res[0]
-                        finances = (r0.get("finances") or [])[:3]
-                        finances_dispo = bool(finances)
-                        finances_statut = "ok" if finances else "non_publies"
-                        sie = r0.get("siege") or {}
-                        adr_siege = sie.get("adresse")
-                        if isinstance(adr_siege, dict):
-                            adr_siege = " ".join(
-                                x for x in (adr_siege.get("adresse_ligne_1"), adr_siege.get("adresse_ligne_2")) if x
-                            ) or None
-                        elif not isinstance(adr_siege, str):
-                            adr_siege = sie.get("adresse_ligne_1") if isinstance(sie.get("adresse_ligne_1"), str) else None
-                        if not street and adr_siege:
-                            modifs["Street"] = adr_siege
-                        if not zip_ and sie.get("code_postal"):
-                            modifs["Zip_Code"] = sie["code_postal"]
-                        if not city and sie.get("ville"):
-                            modifs["City"] = sie["ville"]
-                        if any(k in modifs for k in ("Street", "Zip_Code", "City")):
-                            notes.append("adresse complétée via le registre national des entreprises")
+                    d0 = rp.json() or {}
+                    # finances : dédoublonnées par exercice (Pappers peut renvoyer
+                    # deux lignes pour une même année, une avec date de clôture et
+                    # une sans : garder la plus complète), 3 exercices récents
+                    vus: dict = {}
+                    for f in d0.get("finances") or []:
+                        an = f.get("annee")
+                        if an is None:
+                            continue
+                        prev = vus.get(an)
+                        if prev is None or (not prev.get("date_de_cloture_exercice") and f.get("date_de_cloture_exercice")):
+                            vus[an] = f
+                    finances = [vus[a] for a in sorted(vus, reverse=True)][:3]
+                    finances_dispo = bool(finances)
+                    finances_statut = "ok" if finances else "non_publies"
+                    sie = d0.get("siege") or {}
+                    adr_siege = sie.get("adresse")
+                    if isinstance(adr_siege, dict):
+                        adr_siege = " ".join(
+                            x for x in (adr_siege.get("adresse_ligne_1"), adr_siege.get("adresse_ligne_2")) if x
+                        ) or None
+                    elif not isinstance(adr_siege, str):
+                        adr_siege = sie.get("adresse_ligne_1") if isinstance(sie.get("adresse_ligne_1"), str) else None
+                    if not street and adr_siege:
+                        modifs["Street"] = adr_siege
+                    if not zip_ and sie.get("code_postal"):
+                        modifs["Zip_Code"] = sie["code_postal"]
+                    if not city and sie.get("ville"):
+                        modifs["City"] = sie["ville"]
+                    if any(k in modifs for k in ("Street", "Zip_Code", "City")):
+                        notes.append("adresse complétée via le registre national des entreprises")
                 elif rp.status_code in (402, 403, 429):
                     finances_statut = "api_indisponible"
                     notes.append(f"Pappers indisponible (HTTP {rp.status_code}) : adresse/finances non complétées")
@@ -1178,8 +1192,18 @@ async def preparer_etude(lead_id: str, variante: str = "societe") -> str:
 
             },
             "finances_pappers": [
-                {"chiffre_affaires": f.get("chiffre_affaires"), "resultat_net": f.get("resultat_net"),
-                 "exercice": f.get("date_cloture_exercice")}
+                {"chiffre_affaires": f.get("chiffre_affaires"),
+                 "resultat_net": f.get("resultat"),
+                 "exercice": f.get("date_de_cloture_exercice") or str(f.get("annee") or ""),
+                 "croissance_ca": f.get("taux_croissance_chiffre_affaires"),
+                 "marge_brute": f.get("marge_brute"),
+                 "ebitda": f.get("excedent_brut_exploitation"),
+                 "marge_ebitda": f.get("taux_marge_EBITDA"),
+                 "bfr": f.get("BFR"),
+                 "bfr_jours_ca": f.get("BFR_jours_CA"),
+                 "delai_clients_jours": f.get("delai_paiement_clients_jours"),
+                 "delai_fournisseurs_jours": f.get("delai_paiement_fournisseurs_jours"),
+                 "effectif": f.get("effectif")}
                 for f in finances
             ] if finances else [],
             "comptes_publies": finances_dispo,
