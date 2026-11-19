@@ -10,9 +10,8 @@ Devis (Quotes) du process « devis cession/location & location/cession ».
   création des champs (scope settings.fields). Le refus est donc signalé sans
   interrompre le workflow ; il faudra ajouter le scope au prochain Generate Code
   pour lire/écrire les devis depuis l'agent.
-- Chaque champ tente plusieurs formes de payload (l'API Zoho évolue entre
-  pick_list_values v1/v2, wrapper « field » ou non) et consigne l'erreur
-  exacte en cas d'échec, champ par champ.
+- Chaque champ tente plusieurs formes de payload et consigne l'erreur exacte
+  en cas d'échec, champ par champ.
 """
 
 from __future__ import annotations
@@ -96,11 +95,8 @@ def _payloads(spec: dict) -> list:
     else:  # texte
         corps = [("texte", {"field_label": label, "data_type": "text",
                            "length": spec.get("longueur", 120)})]
-    tentatives = []
-    for nom, body in corps:
-        tentatives.append((nom + "_enveloppe", {"field": body}))
-        tentatives.append((nom + "_nu", body))
-    return tentatives
+    # L'API v8 exige une clé "fields" (tableau) : MANDATORY_NOT_FOUND sinon.
+    return [(nom, {"fields": [body]}) for nom, body in corps]
 
 
 def _erreur_courte(resp) -> str:
