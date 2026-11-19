@@ -1,10 +1,12 @@
 """Outils Zoho CRM de l'agent refinancement (crédit-bail) — SylvaGreen Capital.
 
-Deux outils (progression actée : étapes 1-2 du process uniquement) :
+Deux outils + lecture de pièces jointes CRM (progression : étapes 1-2 outillées) :
 - enregistrer_demande : crée le DOSSIER (Affaire du Pipeline « Refinancement »,
   disposition Refinancement, étape Qualification) dès la prise de demande.
 - preparer_client    : crée/complète la fiche Compte du bénéficiaire depuis le
   registre national (Pappers) et renvoie le dossier de bancabilité.
+- lire_piece_jointe : lit le TEXTE des pièces jointes (synthèses, devis) posées
+  sur un compte client ou un dossier du CRM (Zoho ; PDF via pypdf).
 
 Le module Devis (Quotes) porte les VERSIONS de devis ; il exige des lignes produit
 (sous-formulaire Quoted_Items obligatoire) : il est créé au chiffrage, quand
@@ -13,6 +15,7 @@ l'équipement réel est connu — jamais à la prise de demande.
 
 from __future__ import annotations
 
+import io
 import json
 import os
 import re
@@ -191,6 +194,63 @@ async def _lire_description(client_http, module: str, record_id: str) -> str:
 
 def _note(description: str, texte: str) -> str:
     return (description + "\n" if description else "") + f"[{datetime.now():%d/%m/%Y}] Agent refinancement : {texte}"
+
+
+async def _trouver_deal(client_http, cible: str) -> dict:
+    """Localise une affaire par id (>= 15 chiffres) ou nom exact (normalisé).
+    Renvoie {verdict: introuvable|unique|plusieurs, deals: [...] }."""
+    cible = (cible or "").strip()
+    if cible.isdigit() and len(cible) >= 15:
+        r = await client_http.get(
+            f"{ZOHO_CRM}/Deals", params={"ids": cible, "fields": "id,Deal_Name,Pipeline"}, headers=await _h())
+        if r.status_code == 200 and r.json().get("data"):
+            return {"verdict": "unique", "deals": r.json()["data"]}
+    cn = _norm(cible)
+    if not cn:
+        return {"verdict": "introuvable", "deals": []}
+    preco = _mots(cible, 1)
+    tout = await _search("Deals", f"(Deal_Name:starts_with:{preco[0]})", "id,Deal_Name,Pipeline") if preco else []
+    exacts = [d for d in tout if _norm(d.get("Deal_Name") or "") == cn]
+    if exacts:
+        return {"verdict": "unique", "deals": exacts[:1]}
+    contiennent = [d for d in tout if cn in _norm(d.get("Deal_Name") or "")]
+    if len(contiennent) == 1:
+        return {"verdict": "unique", "deals": contiennent}
+    return {"verdict": "plusieurs" if contiennent else "introuvable", "deals": contiennent[:5]}
+
+
+async def _pieces_jointes(client_http, module: str, record_id: str) -> list:
+    """Pièces jointes d'un enregistrement (cette org exige le paramètre fields)."""
+    r = await client_http.get(
+        f"{ZOHO_CRM}/{module}/{record_id}/Attachments",
+        params={"fields": "File_Name,Size", "per_page": 50},
+        headers=await _h(),
+    )
+    if r.status_code != 200:
+        return []
+    return r.json().get("data", [])
+
+
+def _extrait_texte(nom: str, contenu: bytes) -> str:
+    """Texte d'une pièce jointe : PDF (pypdf), texte brut ; sinon message clair."""
+    basses = (nom or "").lower()
+    if basses.endswith(".pdf"):
+        try:
+            from pypdf import PdfReader
+        except Exception:
+            return "[PDF : bibliothèque d'extraction indisponible dans le worker]"
+        try:
+            lecteur = PdfReader(io.BytesIO(contenu))
+            pages = [(p.extract_text() or "") for p in lecteur.pages]
+            texte = "\n".join(pages)
+            if not texte.strip():
+                return "[PDF sans couche texte (scan ou image) : non déchiffré, demander la version texte]"
+            return texte
+        except Exception as e:
+            return f"[PDF illisible : {type(e).__name__}]"
+    if basses.endswith((".txt", ".md", ".csv", ".json", ".html", ".htm")):
+        return contenu.decode("utf-8", "replace")
+    return "[fichier non textuel : non déchiffré (images/OCR non gérés)]"
 
 
 # ---------------------------------------------------------------------------
@@ -558,4 +618,87 @@ async def preparer_client(
             "fiche_mise_a_jour": maj_champs,
             "points_attention": points or None,
             "message": "Dossier de bancabilité prêt. La décision « bankable ou non » reste à Olivier ; les chiffres manquants se demandent au client (relevés bancaires, liasse).",
+        }, ensure_ascii=False)
+
+
+# ---------------------------------------------------------------------------
+# Lecture CRM — pièces jointes (synthèses, devis) d'un compte ou d'un dossier
+# ---------------------------------------------------------------------------
+@agents.tool
+async def lire_piece_jointe(
+    client: str = "",
+    dossier: str = "",
+    nom: str = "",
+) -> str:
+    """LIT le TEXTE des pièces jointes posées dans le CRM (par Olivier) sur le
+    compte d'un client bénéficiaire OU sur son dossier (Affaire) : typiquement
+    la synthèse d'une demande ou les devis fournisseur. À utiliser à l'étape 1 :
+    si une synthèse est déjà jointe au CRM, lire CETTE source AVANT d'enregistrer
+    la demande, et reformuler ce qui a été lu (équipement, prix, distributeur)
+    avant toute écriture. Ne JAMAIS déduire un détail non présent dans le texte.
+    - client : nom de la société bénéficiaire OU son SIREN (compte Zoho).
+    - dossier : nom OU id (17 chiffres) de l'affaire, si la pièce est sur le
+      dossier. Si client et dossier sont donnés : pièces des DEUX sources.
+      Au moins l'un des deux est requis.
+    - nom : sous-chaîne de filtre sur le nom de fichier (ex. « synthèse »,
+      « devis », « carbon ») ; vide = toutes les pièces (max 3 par source).
+    Les fichiers PDF à couche texte et les fichiers texte sont déchiffrés ; les
+    images et scans ne le sont pas (message explicite en ce cas).
+    Renvoie JSON {sources, pieces: [{sur, nom, taille_octets, texte, tronque}],
+    message}, texte éventuellement tronqué à 12 000 caractères par pièce."""
+    async with httpx.AsyncClient(timeout=120) as chttp:
+        sources: list = []  # (module, record_id, nom_affiché)
+        if dossier:
+            td = await _trouver_deal(chttp, dossier)
+            if td["verdict"] == "unique":
+                d = td["deals"][0]
+                sources.append(("Deals", str(d.get("id")), d.get("Deal_Name")))
+            elif td["verdict"] == "plusieurs":
+                return json.dumps({
+                    "erreur": "Plusieurs affaires correspondent : préciser l'id du dossier.",
+                    "candidats": [{"id": x.get("id"), "nom": x.get("Deal_Name")} for x in td["deals"]],
+                }, ensure_ascii=False)
+            else:
+                return json.dumps({"erreur": f"Dossier introuvable : « {dossier} »."}, ensure_ascii=False)
+        if client or not dossier:
+            tc = await _trouver_compte(chttp, client)
+            if tc["verdict"] == "unique":
+                c = tc["comptes"][0]
+                sources.append(("Accounts", str(c.get("id")), c.get("Account_Name")))
+            elif tc["verdict"] == "plusieurs":
+                return json.dumps({
+                    "erreur": "Plusieurs comptes correspondent : préciser (SIREN de préférence).",
+                    "candidats": [{"id": f.get("id"), "nom": f.get("Account_Name"), "siren": f.get("SIRET")} for f in tc["comptes"]],
+                }, ensure_ascii=False)
+            elif not sources:
+                return json.dumps({"erreur": "Aucune source : donner un client (nom/SIREN) ou un dossier (nom/id)."}, ensure_ascii=False)
+
+        pieces: list = []
+        for module, rid, rnom in sources:
+            for pj in (await _pieces_jointes(chttp, module, rid))[:3]:
+                fname = pj.get("File_Name") or ""
+                if nom and _norm(nom) not in _norm(fname):
+                    continue
+                entetes = {**await _h(), "Accept": "application/octet-stream"}
+                r = await chttp.get(f"{ZOHO_CRM}/{module}/{rid}/Attachments/{pj.get('id')}", headers=entetes)
+                if r.status_code != 200:
+                    pieces.append({"sur": rnom, "nom": fname, "erreur": f"téléchargement HTTP {r.status_code}"})
+                    continue
+                texte = _extrait_texte(fname, r.content)
+                tronque = False
+                if len(texte) > 12000:
+                    texte = texte[:12000]
+                    tronque = True
+                pieces.append({"sur": rnom, "nom": fname, "taille_octets": pj.get("Size"), "texte": texte, "tronque": tronque})
+
+        if not pieces:
+            return json.dumps({
+                "erreur": "Aucune pièce jointe lisible trouvée (filtre ou source sans pièce).",
+                "sources_interrogées": [{"enregistrement": rnom, "module": m} for m, _, rnom in sources],
+            }, ensure_ascii=False)
+        return json.dumps({
+            "sources": [{"enregistrement": rnom, "module": m} for m, _, rnom in sources],
+            "pieces": pieces,
+            "nb": len(pieces),
+            "message": "Texte brut des pièces jointes. Reformule les points clés (équipement, prix, distributeur, conditions) avant d'enregistrer ou de compléter le dossier.",
         }, ensure_ascii=False)

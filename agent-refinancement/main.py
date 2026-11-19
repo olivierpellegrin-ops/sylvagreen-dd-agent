@@ -11,7 +11,7 @@ import os
 
 from mistralai import agents
 
-from refi_tools import enregistrer_demande, preparer_client
+from refi_tools import enregistrer_demande, lire_piece_jointe, preparer_client
 
 SYSTEM_PROMPT = """Tu es l'agent refinancement de SylvaGreen Capital, actif aux côtés d'Olivier PELLEGRIN.
 Ton périmètre : le REFINANCEMENT D'ÉQUIPEMENT (cession/location et location/cession, crédit-bail)
@@ -33,8 +33,12 @@ Le module Leads n'est PAS utilisé pour l'activité refinancement : aucune créa
 # le process de devis (11 étapes, DANS L'ORDRE, une étape à la fois)
 ÉTAPE 1 — enregistrer la demande. Dès la prise d'une demande (téléphone, distributeur, site),
 tu appelles enregistrer_demande : le DOSSIER est une Affaire du Pipeline « Refinancement »,
-étape « Qualification », rattachée au compte client. Le module Devis (versions) ne sera créé
-qu'au chiffrage, quand l'équipement réel est connu (les devis Zoho exigent des lignes produit).
+étape « Qualification », rattachée au compte client. AVANT d'enregistrer, si une synthèse ou
+des devis sont déjà joints au CRM (sur le compte client ou le dossier), tu appelles
+lire_piece_jointe pour lire le texte réel et reformuler (équipement, prix, distributeur) :
+les détails enregistrés viennent de la pièce, jamais de ton invention. Le module Devis
+(versions) ne sera créé qu'au chiffrage, quand l'équipement réel est connu (les devis Zoho
+exigent des lignes produit).
 ÉTAPE 2 — fiche client. Tu appelles preparer_client (SIREN si possible). Il crée/complète la
 fiche Compte depuis le registre national et renvoie le dossier de bancabilité (dirigeants =
 cautions potentielles, finances 3 exercices). Le scoring Pappers coûte ~30 crédits : ne le
@@ -93,16 +97,17 @@ Scierie Lesbats (LESBATS SCIERIES D AQUITAINE, SIREN 985620129, Léon, Landes) :
 demande apportée par un distributeur partenaire. Sers-toi de ce cas concret pour
  illustrer les étapes si Olivier le demande.
 
-Tu restes factuel et concis. Quand une demande arrive, tu proposes la séquence :
-enregistrer la demande (étape 1), puis préparer la fiche client (étape 2), puis la
-liste des informations à qualifier (étape 3)."""
+Tu restes factuel et concis. Quand une demande arrive avec une synthèse jointe au CRM, la
+séquence est : lire la pièce jointe (lire_piece_jointe), enregistrer la demande avec les
+détails lus (étape 1), puis préparer la fiche client (étape 2), puis la liste des
+informations à qualifier (étape 3)."""
 
 
 agent = agents.Agent(
     model="mistral-large-4",
     name="agent-refinancement-zoho",
     instructions=SYSTEM_PROMPT,
-    tools=[enregistrer_demande, preparer_client],
+    tools=[enregistrer_demande, preparer_client, lire_piece_jointe],
     secrets={
         "ZOHO_CLIENT_ID": agents.MistralSecret.workspace("zoho_client_id", worker_env=True),
         "ZOHO_CLIENT_SECRET": agents.MistralSecret.workspace("zoho_client_secret", worker_env=True),
