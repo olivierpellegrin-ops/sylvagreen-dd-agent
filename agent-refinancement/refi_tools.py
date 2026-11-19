@@ -1,13 +1,23 @@
 """Outils Zoho CRM de l'agent refinancement (crédit-bail) — SylvaGreen Capital.
 
-Deux outils + lecture de pièces jointes CRM (progression : étapes 1-2 outillées) :
+Progression : étapes 1-2 outillées ; convention actée « 1 devis = 1 affaire » :
 - enregistrer_demande : crée le DOSSIER (Affaire du Pipeline « Refinancement »,
-  disposition Refinancement, étape Qualification) dès la prise de demande.
+  disposition Refinancement, étape Qualification) dès la prise de demande ; nom
+  préfixé du code du dossier {CODE}-{NNN} (index par compte, croissant, jamais
+  réutilisé).
 - preparer_client    : crée/complète la fiche Compte du bénéficiaire depuis le
   registre national (Pappers) et renvoie le dossier de bancabilité.
 - lire_piece_jointe : lit le TEXTE des pièces jointes (synthèses, devis) posées
-  sur un compte client ou un dossier du CRM (Zoho ; PDF via pypdf).
+  sur un compte client ou un dossier du CRM (Zoho ; PDF via pypdf) ; filtre
+  non_codes pour ne voir que les devis fournisseur NON traités.
+- marquer_devis_traite : renomme le devis brut avec le code du dossier
+  ({CODE}-{NNN}_{date}_{nom original}) et le recopie sur l'affaire — un devis
+  codé n'est jamais retraité.
+- enregistrer_synthese : Note Zoho + fichier SYN-{CODE}_{date}.txt sur l'affaire.
+- lire_synthese : relit les synthèses (notes + fichiers SYN-) d'un dossier.
 
+Les devis fournisseur bruts sont déposés par Olivier sur le COMPTE client
+(parking) sous un nom NON codé ; le préfixe SYN- est réservé aux synthèses.
 Le module Devis (Quotes) porte les VERSIONS de devis ; il exige des lignes produit
 (sous-formulaire Quoted_Items obligatoire) : il est créé au chiffrage, quand
 l'équipement réel est connu — jamais à la prise de demande.
@@ -21,7 +31,7 @@ import os
 import re
 import time
 import unicodedata
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import httpx
 
@@ -208,6 +218,16 @@ async def _trouver_deal(client_http, cible: str) -> dict:
     cn = _norm(cible)
     if not cn:
         return {"verdict": "introuvable", "deals": []}
+    mc = re.match(r"^([A-Za-z]{2,4})-?(\d{3})$", cible.strip())
+    if mc:
+        # recherche par CODE de dossier (ex. « LES-001 ») : pas de mots-clés
+        prefixe, num = mc.group(1).upper(), mc.group(2)
+        cn_code = _norm(prefixe + "-" + num)
+        tout = await _search("Deals", f"(Deal_Name:starts_with:{prefixe})", "id,Deal_Name,Pipeline")
+        exacts = [d for d in tout if cn_code in _norm(d.get("Deal_Name") or "")]
+        if exacts:
+            return {"verdict": "unique", "deals": exacts[:1]}
+        return {"verdict": "introuvable", "deals": []}
     preco = _mots(cible, 1)
     tout = await _search("Deals", f"(Deal_Name:starts_with:{preco[0]})", "id,Deal_Name,Pipeline") if preco else []
     exacts = [d for d in tout if _norm(d.get("Deal_Name") or "") == cn]
@@ -254,6 +274,107 @@ def _extrait_texte(nom: str, contenu: bytes) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Helpers du flux « 1 devis = 1 affaire » (codes, renommage, synthèses)
+# ---------------------------------------------------------------------------
+def _code_client(nom: str) -> str:
+    """Code du compte : 3 premières lettres alphabétiques du nom, majuscules."""
+    lettres = "".join(ch for ch in _norm(nom) if ch.isalpha())[:3].upper()
+    return lettres if len(lettres) >= 2 else "DOS"
+
+
+def _est_traite(nom_fichier: str) -> bool:
+    """Fichier déjà traité : synthèse (SYN-) ou devis codé (code dossier en tête)."""
+    n = (nom_fichier or "").strip()
+    if n.upper().startswith("SYN-"):
+        return True
+    return bool(re.match(r"^[A-Za-z]{2,4}[-_]\d{3}(_|[-.])", n))
+
+
+def _code_du_deal(deal_name: str) -> str:
+    """Extrait {LETTRES}-{NNN} du nom d'une affaire (vide si absent)."""
+    m = re.search(r"\b([A-Za-z]{2,4})-(\d{3})\b", deal_name or "")
+    return f"{m.group(1).upper()}-{m.group(2)}" if m else ""
+
+async def _deal_par_code_sur_compte(chttp, compte_id: str, code: str):
+    """Affaire d'un compte par son code dossier (nom en préfixe). Immédiat via
+    les affaires liées au compte, contrairement à l'API search de Zoho dont
+    l'index prend plusieurs minutes (recette API : affaire fraîchement créée
+    introuvable en search, présente en liste liée)."""
+    cn = _norm(code)
+    if len(cn) < 5 or not cn[-3:].isdigit():
+        return None
+    r = await chttp.get(
+        f"{ZOHO_CRM}/Accounts/{compte_id}/Deals",
+        params={"fields": "id,Deal_Name,Pipeline", "per_page": 100},
+        headers=await _h(),
+    )
+    if r.status_code != 200:
+        return None
+    for d in r.json().get("data", []):
+        if _norm(d.get("Deal_Name") or "").startswith(cn):
+            return d
+    return None
+
+
+
+def _max_index(noms: list, lettres: str) -> int:
+    """Plus grand index {LETTRES}-{NNN} trouvé dans des noms (affaires, fichiers)."""
+    pat = re.compile(re.escape(lettres) + r"[-_ ]?(\d{3})", re.IGNORECASE)
+    maxi = 0
+    for nom in noms:
+        for m in pat.finditer(nom or ""):
+            maxi = max(maxi, int(m.group(1)))
+    return maxi
+
+
+async def _televerser_piece(chttp, module: str, record_id: str, nom: str, contenu: bytes) -> dict:
+    """Téléverse une pièce jointe (multipart). Renvoie {id} ou {erreur}."""
+    r = await chttp.post(
+        f"{ZOHO_CRM}/{module}/{record_id}/Attachments",
+        files={"file": (nom, contenu, "application/octet-stream")},
+        headers=await _h(),
+    )
+    if r.status_code >= 400:
+        return {"erreur": f"téléversement refusé : HTTP {r.status_code} {r.text[:200]}"}
+    d = (r.json().get("data") or [{}])[0]
+    if d.get("status") != "success":
+        return {"erreur": json.dumps(d, ensure_ascii=False)[:300]}
+    return {"id": (d.get("details") or {}).get("id")}
+
+
+async def _ajouter_note(chttp, module: str, record_id: str, titre: str, texte: str) -> dict:
+    """Note rattachée à un enregistrement (Parent_Id.module en objet, validé)."""
+    payload: dict = {"Note_Content": texte}
+    if titre:
+        payload["Note_Title"] = titre
+    payload["Parent_Id"] = {"id": record_id, "module": {"api_name": module}}
+    payload["Se_Module"] = module
+    r = await chttp.post(f"{ZOHO_CRM}/Notes", json={"data": [payload]}, headers=await _h())
+    if r.status_code >= 400:
+        return {"erreur": f"note refusée : HTTP {r.status_code} {r.text[:200]}"}
+    d = (r.json().get("data") or [{}])[0]
+    if d.get("code") not in ("SUCCESS", None) and d.get("status") != "success":
+        return {"erreur": json.dumps(d, ensure_ascii=False)[:300]}
+    return {"id": (d.get("details") or {}).get("id")}
+
+
+async def _notes_du(chttp, module: str, record_id: str) -> list:
+    """Notes d'un enregistrement (liste liée ; retombe sur Note_Content seul)."""
+    r = await chttp.get(
+        f"{ZOHO_CRM}/{module}/{record_id}/Notes",
+        params={"fields": "Note_Title,Note_Content", "per_page": 50},
+        headers=await _h(),
+    )
+    if r.status_code != 200:
+        r = await chttp.get(
+            f"{ZOHO_CRM}/{module}/{record_id}/Notes",
+            params={"fields": "Note_Content", "per_page": 50},
+            headers=await _h(),
+        )
+    return r.json().get("data", []) if r.status_code == 200 else []
+
+
+# ---------------------------------------------------------------------------
 # Étape 1 — enregistrer la demande (dossier dans le Pipeline Refinancement)
 # ---------------------------------------------------------------------------
 @agents.tool
@@ -266,6 +387,7 @@ async def enregistrer_demande(
     prix_ht: str = "",
     prix_ttc: str = "",
     note: str = "",
+    code_dossier: str = "",
 ) -> str:
     """ENREGISTRE une demande de refinancement d'équipement (étape 1 du process) :
     crée le DOSSIER dans Zoho CRM = une Affaire du Pipeline « Refinancement »
@@ -293,10 +415,16 @@ async def enregistrer_demande(
     Le module Devis (versions de devis) sera créé au chiffrage, une fois l'équipement
     réel connu (les devis Zoho exigent des lignes produit). L'outil ne touche JAMAIS
     le champ Amount de l'affaire (= future commission, pas le montant financé).
-    Idempotent : si une affaire Refinancement OUVERTE existe déjà pour ce client et
-    cet équipement, elle est renvoyée sans rien créer.
-    Renvoie JSON {statut: cree|dossier_existant, deal_id, dossier, compte, etape,
-    champs, warnings?}."""
+    Nommage : le nom de l'affaire commence par le CODE DU DOSSIER {CODE}-{NNN}
+    (3 lettres du compte + index à 3 chiffres, propre au compte, croissant, JAMAIS
+    réutilisé, même après une affaire perdue). Règle actée « 1 devis = 1 affaire » :
+    une RÉVISION du devis fournisseur = une NOUVELLE affaire à l'index suivant ;
+    l'outil ne clôture ni ne modifie JAMAIS une affaire existante (clôture :
+    décision d'Olivier seul).
+    - code_dossier : code explicite « ABC-005 » (utilisé tel quel), ou « ABC »
+      (lettres seules : index automatique), ou vide (code déduit du compte).
+    Renvoie JSON {statut: cree, deal_id, dossier, code, index, compte, etape,
+    champs, affaires_ouvertes_similaires?, warnings?}."""
     async with httpx.AsyncClient(timeout=60) as chttp:
         # --- 1. compte bénéficiaire ---
         trouve = await _trouver_compte(chttp, client)
@@ -314,7 +442,12 @@ async def enregistrer_demande(
         compte = trouve["comptes"][0]
         compte_id, compte_nom = compte.get("id"), compte.get("Account_Name")
 
-        # --- 2. doublon de dossier ? affaires ouvertes du client ---
+        # --- 2. code du dossier : {LETTRES}-{NNN} par compte, index jamais réutilisé ---
+        code = (code_dossier or "").strip().upper().replace(" ", "").replace("_", "-")
+        if code and not re.match(r"^[A-Z]{2,4}(-\d{3})?$", code):
+            return json.dumps({"erreur": "code_dossier invalide (attendu : ABC ou ABC-005)."}, ensure_ascii=False)
+        lettres = (code.split("-")[0] if code else "") or _code_client(compte_nom)
+        noms_deals: list = []
         ouverts: list = []
         r = await chttp.get(
             f"{ZOHO_CRM}/Accounts/{compte_id}/Deals",
@@ -323,21 +456,25 @@ async def enregistrer_demande(
         )
         if r.status_code == 200:
             for d in r.json().get("data", []):
+                noms_deals.append(d.get("Deal_Name") or "")
                 if d.get("Pipeline") == PIPELINE_REFI and d.get("Stage") not in STAGES_FINALES:
                     ouverts.append(d)
+        noms_fichiers = [pj.get("File_Name") or "" for pj in await _pieces_jointes(chttp, "Accounts", compte_id)]
+        maxi = max(_max_index(noms_deals, lettres), _max_index(noms_fichiers, lettres))
+        if code and "-" in code:
+            code_final, index = code, int(code.split("-")[1])
+            if index <= maxi:
+                return json.dumps({"erreur": f"code {code} déjà attribué sur ce compte (dernier index connu : {lettres}-{maxi:03d}). Laisser l'index automatique ou corriger."}, ensure_ascii=False)
+        else:
+            index = maxi + 1
+            code_final = f"{lettres}-{index:03d}"
+        # information (jamais bloquant : règle actée 1 devis = 1 affaire)
+        similaires = []
         mots_equip = [w for w in _mots(equipement, 8)]
         for d in ouverts:
             texte = " ".join(_norm(x) for x in (d.get("Deal_Name", ""), d.get("Equipement_nature_et_marque", "")))
             if any(_norm(w) in texte for w in mots_equip if len(w) >= 4):
-                return json.dumps({
-                    "statut": "dossier_existant",
-                    "deal_id": d.get("id"),
-                    "dossier": d.get("Deal_Name"),
-                    "compte": compte_nom,
-                    "compte_id": compte_id,
-                    "etape": d.get("Stage"),
-                    "message": "Une affaire Refinancement ouverte existe déjà pour ce client et cet équipement : rien n'a été créé.",
-                }, ensure_ascii=False)
+                similaires.append({"deal_id": d.get("id"), "dossier": d.get("Deal_Name"), "etape": d.get("Stage")})
 
         # --- 3. résolution des picklists ---
         stage_api, _ = await _resolve(chttp, "Qualification", "Deals", "Stage", DEALS_REFI_LAYOUT_ID)
@@ -364,16 +501,26 @@ async def enregistrer_demande(
                     f"Distributeur « {distributeur} » non trouvé dans le CRM : nom tracé dans la description, "
                     f"fiche compte à créer (le rattacher ensuite comme fournisseur)."
                 )
+        warnings.append("Convention : Closing_Date positionnée à J+90 (champ obligatoire du layout Refinancement) : à ajuster quand l'échéance réelle est connue.")
+        if similaires:
+            warnings.append(
+                "Affaire(s) Refinancement ouverte(s) sur un équipement proche : "
+                + " ; ".join(s["dossier"] for s in similaires)
+                + ". NOUVELLE affaire créée quand même (règle actée : 1 devis = 1 affaire)."
+            )
 
         # --- 5. création de l'affaire ---
         pht, pttc = _montant_float(prix_ht), _montant_float(prix_ttc)
-        deal_name = f"{compte_nom} — {(equipement or '')[:60]}".strip()[:120]
+        deal_name = f"{code_final} — {(equipement or "")[:60] or compte_nom}".strip()[:120]
         champs: dict = {
             "Layout": {"id": DEALS_REFI_LAYOUT_ID},
             "Deal_Name": deal_name,
             "Pipeline": PIPELINE_REFI,
             "Stage": stage_api,
             "Account_Name": {"id": compte_id},
+            # Closing_Date : OBLIGATOIRE sur la disposition Refinancement (recette
+            # API) ; convention provisoire J+90, à ajuster par Olivier.
+            "Closing_Date": f"{datetime.now() + timedelta(days=90):%Y-%m-%d}",
             "Equipement_nature_et_marque": equipement,
             "Description": _note("", f"demande enregistrée (canal : {source}"
                                      + (f" ; apportée par {distributeur}" if distributeur else "")
@@ -405,13 +552,16 @@ async def enregistrer_demande(
             "statut": "cree",
             "deal_id": deal_id,
             "dossier": deal_name,
+            "code": code_final,
+            "index": index,
             "compte": compte_nom,
             "compte_id": compte_id,
             "etape": stage_api,
             "pipeline": PIPELINE_REFI,
             "champs": {k: v for k, v in champs.items() if k not in ("Layout",)},
+            "affaires_ouvertes_similaires": similaires or None,
             "warnings": warnings or None,
-            "message": f"Dossier créé (étape {stage_api}). Prochaine étape du process : fiche client (preparer_client), puis qualification.",
+            "message": f"Dossier {code_final} créé (étape {stage_api}). Enchaîner l'étape 1 : marquer_devis_traite (coder le devis brut), puis enregistrer_synthese ; puis fiche client (preparer_client) et qualification.",
         }, ensure_ascii=False)
 
 
@@ -629,6 +779,7 @@ async def lire_piece_jointe(
     client: str = "",
     dossier: str = "",
     nom: str = "",
+    non_codes: bool = False,
 ) -> str:
     """LIT le TEXTE des pièces jointes posées dans le CRM (par Olivier) sur le
     compte d'un client bénéficiaire OU sur son dossier (Affaire) : typiquement
@@ -642,6 +793,10 @@ async def lire_piece_jointe(
       Au moins l'un des deux est requis.
     - nom : sous-chaîne de filtre sur le nom de fichier (ex. « synthèse »,
       « devis », « carbon ») ; vide = toutes les pièces (max 3 par source).
+    - non_codes : si True, ne renvoie que les fichiers NON codés (ni devis déjà
+      codé {CODE}-{NNN}_..., ni synthèse SYN-) : c'est la vue « devis
+      fournisseur à traiter » du parking du compte (max 10 par source). Un
+      devis déjà codé = déjà traité : JAMAIS retraité.
     Les fichiers PDF à couche texte et les fichiers texte sont déchiffrés ; les
     images et scans ne le sont pas (message explicite en ce cas).
     Renvoie JSON {sources, pieces: [{sur, nom, taille_octets, texte, tronque}],
@@ -675,7 +830,10 @@ async def lire_piece_jointe(
 
         pieces: list = []
         for module, rid, rnom in sources:
-            for pj in (await _pieces_jointes(chttp, module, rid))[:3]:
+            liste_pj = await _pieces_jointes(chttp, module, rid)
+            if non_codes:
+                liste_pj = [pj for pj in liste_pj if not _est_traite(pj.get("File_Name") or "")]
+            for pj in liste_pj[: (10 if non_codes else 3)]:
                 fname = pj.get("File_Name") or ""
                 if nom and _norm(nom) not in _norm(fname):
                     continue
@@ -701,4 +859,280 @@ async def lire_piece_jointe(
             "pieces": pieces,
             "nb": len(pieces),
             "message": "Texte brut des pièces jointes. Reformule les points clés (équipement, prix, distributeur, conditions) avant d'enregistrer ou de compléter le dossier.",
+        }, ensure_ascii=False)
+
+
+# ---------------------------------------------------------------------------
+# Étape 1 (suite) — coder le devis traité, synthèse du dossier, relecture
+# ---------------------------------------------------------------------------
+@agents.tool
+async def marquer_devis_traite(
+    client: str,
+    fichier: str,
+    code_dossier: str,
+) -> str:
+    """MARQUE un devis fournisseur comme TRAITÉ (à enchaîner juste après
+    enregistrer_demande) : renomme le devis brut déposé sur le COMPTE du client
+    avec le code du dossier — nouveau nom {CODE}-{NNN}_{AAAAMMJJ}_{nom original}
+    (ex. LES-001_20261120_devis-carbon-stop.pdf) — puis RECOPIE le devis sous
+    ce nom codé sur l'affaire du dossier. C'est ce renommage qui garantit qu'un
+    devis n'est JAMAIS traité deux fois (l'agent ne traite que les fichiers
+    non codés du compte).
+    - client : nom de la société bénéficiaire OU son SIREN (compte Zoho).
+    - fichier : nom du devis brut (ou une sous-chaîne distinctive) tel que
+      déposé sur le compte.
+    - code_dossier : code {LETTRES}-{NNN} renvoyé par enregistrer_demande
+      (ex. « LES-001 ») : OBLIGATOIRE, c'est lui qui identifie l'affaire sur
+      laquelle recopier le devis.
+    Ordre sécurisant : le nouveau fichier est téléversé AVANT la suppression de
+    l'original ; en cas d'échec aucun fichier n'est perdu. Un fichier déjà codé
+    (ou SYN-) est refusé, jamais retraité.
+    Renvoie JSON {statut: marque, fichier_avant, fichier_apres, piece_id,
+    recopie_sur: {deal_id, dossier, piece_id} | null, warnings?}."""
+    async with httpx.AsyncClient(timeout=120) as chttp:
+        trouve = await _trouver_compte(chttp, client)
+        if trouve["verdict"] == "introuvable":
+            return json.dumps({"erreur": f"Compte introuvable pour « {client} »."}, ensure_ascii=False)
+        if trouve["verdict"] == "plusieurs":
+            return json.dumps({
+                "erreur": "Plusieurs comptes correspondent : préciser (SIREN de préférence).",
+                "candidats": [{"id": f.get("id"), "nom": f.get("Account_Name")} for f in trouve["comptes"]],
+            }, ensure_ascii=False)
+        compte = trouve["comptes"][0]
+        compte_id, compte_nom = compte.get("id"), compte.get("Account_Name")
+
+        code_dossier = (code_dossier or "").strip().upper().replace(" ", "")
+        if not re.match(r"^[A-Z]{2,4}-\d{3}$", code_dossier):
+            return json.dumps({"erreur": f"code_dossier invalide : « {code_dossier} » (attendu : ABC-001)."}, ensure_ascii=False)
+
+        cible = _norm(fichier)
+        if not cible:
+            return json.dumps({"erreur": "Donner le nom du fichier devis à coder."}, ensure_ascii=False)
+        pieces = await _pieces_jointes(chttp, "Accounts", compte_id)
+        match = next((pj for pj in pieces if _norm(pj.get("File_Name") or "") == cible), None)
+        if not match:
+            cands = [pj for pj in pieces
+                     if cible in _norm(pj.get("File_Name") or "") and not _est_traite(pj.get("File_Name") or "")]
+            if len(cands) == 1:
+                match = cands[0]
+        if not match:
+            return json.dumps({
+                "erreur": "Devis non trouvé sur le compte (ou déjà codé/traité : jamais retraité).",
+                "client": compte_nom,
+                "fichiers_sur_le_compte": [pj.get("File_Name") for pj in pieces] or None,
+            }, ensure_ascii=False)
+        fname = match.get("File_Name") or ""
+        if _est_traite(fname):
+            return json.dumps({"erreur": f"« {fname} » est déjà un fichier codé/synthèse : jamais retraité."}, ensure_ascii=False)
+
+        # affaire de recopie (best effort : le renommage a lieu même sans).
+        # Search Zoho : index avec retard → d'abord les affaires LIÉES au
+        # compte (immédiat), puis repli sur search.
+        deal = await _deal_par_code_sur_compte(chttp, compte_id, code_dossier)
+        if not deal:
+            td = await _trouver_deal(chttp, code_dossier)
+            deal = td["deals"][0] if td["verdict"] == "unique" else None
+        warnings: list = []
+        if not deal:
+            warnings.append(f"Affaire {code_dossier} introuvable : devis codé sur le compte mais NON recopié sur une affaire (à vérifier avec Olivier).")
+
+        base, ext = os.path.splitext(fname)
+        nouveau_nom = f"{code_dossier}_{datetime.now():%Y%m%d}_{base}{ext}"
+
+        entetes = {**await _h(), "Accept": "application/octet-stream"}
+        r = await chttp.get(f"{ZOHO_CRM}/Accounts/{compte_id}/Attachments/{match.get('id')}", headers=entetes)
+        if r.status_code != 200:
+            return json.dumps({"erreur": f"téléchargement du devis refusé : HTTP {r.status_code}."}, ensure_ascii=False)
+        contenu = r.content
+
+        up = await _televerser_piece(chttp, "Accounts", compte_id, nouveau_nom, contenu)
+        if up.get("erreur"):
+            return json.dumps({"erreur": up["erreur"], "message": "Rien n'a été modifié : l'original est intact."}, ensure_ascii=False)
+        nouvel_id = up.get("id")
+
+        recopie = None
+        if deal:
+            upd = await _televerser_piece(chttp, "Deals", str(deal.get("id")), nouveau_nom, contenu)
+            if upd.get("erreur"):
+                warnings.append(f"Recopie sur l'affaire impossible : {upd['erreur']}")
+            else:
+                recopie = {"deal_id": deal.get("id"), "dossier": deal.get("Deal_Name"), "piece_id": upd.get("id")}
+
+        rd = await chttp.delete(f"{ZOHO_CRM}/Accounts/{compte_id}/Attachments/{match.get('id')}", headers=await _h())
+        if rd.status_code >= 400:
+            warnings.append(f"Original non supprimé (HTTP {rd.status_code}) : deux exemplaires sur le compte, nettoyage manuel.")
+
+        return json.dumps({
+            "statut": "marque",
+            "fichier_avant": fname,
+            "fichier_apres": nouveau_nom,
+            "piece_id": nouvel_id,
+            "client": compte_nom,
+            "compte_id": compte_id,
+            "recopie_sur": recopie,
+            "warnings": warnings or None,
+            "message": f"Devis codé {code_dossier} : il ne sera plus jamais traité."
+                       + (" Recopié sur l'affaire du dossier." if recopie else ""),
+        }, ensure_ascii=False)
+
+
+@agents.tool
+async def enregistrer_synthese(dossier: str, texte: str, client: str = "") -> str:
+    """ENREGISTRE la synthèse du dossier (dernier geste de l'étape 1) : pose sur
+    l'AFFAIRE un double enregistrement lisible — une Note Zoho (titre
+    « Synthèse {code} ») ET un fichier texte SYN-{CODE}_{AAAAMMJJ}.txt — pour que
+    la lecture du devis reste consultable sans rouvrir le PDF. Convention : le
+    préfixe SYN- est RÉSERVÉ aux synthèses, jamais traitées comme des devis.
+    - dossier : nom OU id (17 chiffres) OU code (ex. « LES-001 ») de l'affaire.
+      CONSEILLÉ : donner AUSSI le client si le dossier vient d'être créé (la
+      recherche Zoho indexe les affaires avec un retard de plusieurs minutes ;
+      le client permet la résolution immédiate par les affaires liées).
+    - client : nom OU SIREN du compte bénéficiaire (recommandé juste après la
+      création de l'affaire).
+    - texte : synthèse factuelle de la lecture du devis (équipement, prix,
+      distributeur, conditions, version) — UNIQUEMENT ce qui a été lu dans la
+      pièce, rien d'inventé. Une ligne d'en-tête [SYN-...] est ajoutée
+      automatiquement. Un texte trop long est refusé.
+    Renvoie JSON {statut: cree, dossier, deal_id, code, note_id, fichier,
+    fichier_id}."""
+    texte = (texte or "").strip()
+    if not texte:
+        return json.dumps({"erreur": "Texte de synthèse vide."}, ensure_ascii=False)
+    if len(texte) > 20000:
+        return json.dumps({"erreur": f"Synthèse trop longue ({len(texte)} caractères, max 20 000) : la résumer."}, ensure_ascii=False)
+    async with httpx.AsyncClient(timeout=90) as chttp:
+        deal = None
+        if client:
+            tc = await _trouver_compte(chttp, client)
+            if tc["verdict"] == "unique":
+                deal = await _deal_par_code_sur_compte(chttp, tc["comptes"][0].get("id"), dossier)
+            elif tc["verdict"] == "plusieurs":
+                return json.dumps({
+                    "erreur": "Plusieurs comptes correspondent : préciser (SIREN de préférence).",
+                    "candidats": [{"id": f.get("id"), "nom": f.get("Account_Name")} for f in tc["comptes"]],
+                }, ensure_ascii=False)
+        td = ({"verdict": "unique", "deals": [deal]} if deal else None) or await _trouver_deal(chttp, dossier)
+        if td["verdict"] == "plusieurs":
+            return json.dumps({
+                "erreur": "Plusieurs affaires correspondent : préciser l'id ou le code du dossier.",
+                "candidats": [{"id": d.get("id"), "nom": d.get("Deal_Name")} for d in td["deals"]],
+            }, ensure_ascii=False)
+        if td["verdict"] != "unique":
+            return json.dumps({"erreur": f"Dossier introuvable : « {dossier} ». Donner aussi le client (résolution immédiate via les affaires liées au compte)."}, ensure_ascii=False)
+        deal = td["deals"][0]
+        deal_id, deal_nom = str(deal.get("id")), deal.get("Deal_Name")
+        code = _code_du_deal(deal_nom)
+        entete = f"[SYN-{code or 'dossier'} — synthèse agent refinancement, {datetime.now():%d/%m/%Y}]\n"
+        note = await _ajouter_note(chttp, "Deals", deal_id, f"Synthèse {code}" if code else "Synthèse", entete + texte)
+        if note.get("erreur"):
+            return json.dumps({"erreur": note["erreur"]}, ensure_ascii=False)
+
+        base_nom = f"SYN-{code}_{datetime.now():%Y%m%d}" if code else f"SYN-dossier_{datetime.now():%Y%m%d}"
+        existants = {pj.get("File_Name") for pj in await _pieces_jointes(chttp, "Deals", deal_id)}
+        nom_fichier, n = f"{base_nom}.txt", 2
+        while nom_fichier in existants:
+            nom_fichier = f"{base_nom}-{n}.txt"
+            n += 1
+        up = await _televerser_piece(chttp, "Deals", deal_id, nom_fichier, (entete + texte).encode("utf-8"))
+        fichier_id = up.get("id")
+        if up.get("erreur"):
+            return json.dumps({
+                "statut": "cree",
+                "dossier": deal_nom,
+                "deal_id": deal_id,
+                "code": code or None,
+                "note_id": note.get("id"),
+                "fichier": None,
+                "warning": f"Note créée mais fichier texte refusé : {up['erreur']}",
+            }, ensure_ascii=False)
+
+        return json.dumps({
+            "statut": "cree",
+            "dossier": deal_nom,
+            "deal_id": deal_id,
+            "code": code or None,
+            "note_id": note.get("id"),
+            "fichier": nom_fichier,
+            "fichier_id": fichier_id,
+            "message": "Synthèse enregistrée (note + fichier texte) sur l'affaire. Étape 1 terminée pour ce devis.",
+        }, ensure_ascii=False)
+
+
+@agents.tool
+async def lire_synthese(dossier: str = "", client: str = "") -> str:
+    """RELIT les synthèses disponibles sans rouvrir les PDF : notes « Synthèse »
+    et fichiers SYN-... d'un dossier (affaire), et/ou fichiers SYN-... posés
+    sur le compte d'un client (parking, ex. synthèse d'origine).
+    - dossier : nom OU id OU code (ex. « LES-001 ») de l'affaire. Pour une
+      affaire fraîchement créée, donner AUSSI le client (recherche Zoho indexée
+      avec un retard : le client permet la résolution immédiate).
+    - client : nom OU SIREN du compte. Au moins l'un des deux est requis ;
+      si les deux : synthèses de l'affaire PUIS celles posées sur le compte.
+    Renvoie JSON {sources, notes: [{titre, contenu}], fichiers: [{sur, nom,
+    texte}], message} ; erreur claire si aucune synthèse trouvée."""
+    async with httpx.AsyncClient(timeout=90) as chttp:
+        sources: list = []  # (module, record_id, nom_affiché)
+        if dossier:
+            # résolution immédiate par le compte quand il est donné (search Zoho :
+            # index avec retard), sinon par l'API search (id, nom, code).
+            d_trouve = None
+            if client:
+                tc0 = await _trouver_compte(chttp, client)
+                if tc0["verdict"] == "unique":
+                    d_trouve = await _deal_par_code_sur_compte(chttp, tc0["comptes"][0].get("id"), dossier)
+            if not d_trouve:
+                td = await _trouver_deal(chttp, dossier)
+                if td["verdict"] == "unique":
+                    d_trouve = td["deals"][0]
+                elif td["verdict"] == "plusieurs":
+                    return json.dumps({
+                        "erreur": "Plusieurs affaires correspondent : préciser l'id ou le code du dossier.",
+                        "candidats": [{"id": x.get("id"), "nom": x.get("Deal_Name")} for x in td["deals"]],
+                    }, ensure_ascii=False)
+            if d_trouve:
+                sources.append(("Deals", str(d_trouve.get("id")), d_trouve.get("Deal_Name")))
+            elif not client:
+                return json.dumps({"erreur": f"Dossier introuvable : « {dossier} » (indiquer aussi le client : la recherche Zoho indexe les affaires fraîches avec un retard)." }, ensure_ascii=False)
+        if client or not dossier:
+            tc = await _trouver_compte(chttp, client)
+            if tc["verdict"] == "unique":
+                c = tc["comptes"][0]
+                sources.append(("Accounts", str(c.get("id")), c.get("Account_Name")))
+            elif tc["verdict"] == "plusieurs" and not sources:
+                return json.dumps({
+                    "erreur": "Plusieurs comptes correspondent : préciser (SIREN de préférence).",
+                    "candidats": [{"id": f.get("id"), "nom": f.get("Account_Name")} for f in tc["comptes"]],
+                }, ensure_ascii=False)
+            elif tc["verdict"] != "unique" and not sources:
+                return json.dumps({"erreur": "Aucune source : donner un dossier (nom/id/code) ou un client (nom/SIREN)."}, ensure_ascii=False)
+
+        notes: list = []
+        fichiers: list = []
+        for module, rid, rnom in sources:
+            for n in await _notes_du(chttp, module, rid):
+                titre = (n.get("Note_Title") or "")
+                contenu = (n.get("Note_Content") or "")
+                if "synth" in _norm(titre) or contenu.lstrip().startswith("[SYN"):
+                    notes.append({"sur": rnom, "titre": titre or None, "contenu": contenu})
+            for pj in await _pieces_jointes(chttp, module, rid):
+                fname = pj.get("File_Name") or ""
+                if not fname.upper().startswith("SYN-"):
+                    continue
+                entetes = {**await _h(), "Accept": "application/octet-stream"}
+                r = await chttp.get(f"{ZOHO_CRM}/{module}/{rid}/Attachments/{pj.get('id')}", headers=entetes)
+                if r.status_code != 200:
+                    fichiers.append({"sur": rnom, "nom": fname, "erreur": f"téléchargement HTTP {r.status_code}"})
+                    continue
+                fichiers.append({"sur": rnom, "nom": fname, "texte": _extrait_texte(fname, r.content)})
+
+        if not notes and not fichiers:
+            return json.dumps({
+                "erreur": "Aucune synthèse trouvée (ni note, ni fichier SYN-).",
+                "sources_interrogées": [{"enregistrement": rnom, "module": m} for m, _, rnom in sources],
+            }, ensure_ascii=False)
+        return json.dumps({
+            "sources": [{"enregistrement": rnom, "module": m} for m, _, rnom in sources],
+            "notes": notes or None,
+            "fichiers": fichiers or None,
+            "message": "Synthèses lues : s'appuyer uniquement sur ce contenu, sans rien inventer au-delà.",
         }, ensure_ascii=False)
