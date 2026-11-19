@@ -5,6 +5,11 @@ Devis (Quotes) du process « devis cession/location & location/cession ».
   et ne crée que les champs absents.
 - dry_run=True : liste le plan sans rien écrire.
 - Sortie compacte : jamais le méta complet du module.
+- La sonde initiale lit un enregistrement pour vérifier le module : le token
+  actuel n'a PAS le scope modules.quotes (refus 401), ce qui n'empêche pas la
+  création des champs (scope settings.fields). Le refus est donc signalé sans
+  interrompre le workflow ; il faudra ajouter le scope au prochain Generate Code
+  pour lire/écrire les devis depuis l'agent.
 - Chaque champ tente plusieurs formes de payload (l'API Zoho évolue entre
   pick_list_values v1/v2, wrapper « field » ou non) et consigne l'erreur
   exacte en cas d'échec, champ par champ.
@@ -126,21 +131,24 @@ async def fondations(dry_run: bool) -> dict:
             )
         headers = {"Authorization": "Zoho-oauthtoken " + body["access_token"]}
 
-        # 0) Le module Devis (Quotes) est-il accessible ?
+        # 0) Sonde : les ENREGISTREMENTS du module exigent le scope
+        # modules.quotes (absent du token actuel). Un refus 401 est signalé
+        # sans interrompre : la création des champs passe par settings.fields.
         sonde = await client.get(
             f"{ZOHO_CRM}/{MODULE}",
             params={"per_page": 2, "page": 1, "fields": "id"},
             headers=headers,
         )
-        if sonde.status_code == 204:
-            module_info = {"http": 204, "nb_page": 0}
-        elif sonde.status_code == 200:
+        module_info = {"http": sonde.status_code}
+        if sonde.status_code == 200:
             data = sonde.json().get("data", [])
-            module_info = {"http": 200, "nb_page": len(data),
-                           "exemple_id": [r.get("id") for r in data]}
-        else:
-            return {"module": MODULE, "module_inaccessible": _erreur_courte(sonde),
-                    "dry_run": dry_run}
+            module_info["nb_page"] = len(data)
+            module_info["exemple_id"] = [r.get("id") for r in data]
+        elif sonde.status_code == 401:
+            module_info["acces_enregistrements"] = (
+                "refuse : ajouter ZohoCRM.modules.quotes.ALL au prochain "
+                "Generate Code. Détail : " + _erreur_courte(sonde)
+            )
 
         # 1) Champs existants du module
         rf = await client.get(
