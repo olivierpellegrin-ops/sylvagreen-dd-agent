@@ -1307,30 +1307,74 @@ async def _fiche_pappers(chttp, siren: str) -> dict:
     return {"identite": identite, "dirigeants": dirigeants, "finances": finances, "siege": d.get("siege") or {}}
 
 
+def _code_organisme(description: str) -> str | None:
+    """Code organisme extrait de la Description d'une fiche Refinanceur.
+    Les fiches réelles écrivent « Code demande (DEM-LES-001-001_CAL_) : CAL. » :
+    le séparateur « : » n'arrive qu'APRÈS la parenthèse, d'où la fenêtre
+    intermédiaire [^:\\n]{0,60} entre « Code demande » et les deux-points.
+    Les fiches plus anciennes « Code demande : CAL » restent lues."""
+    m = re.search(r"code\s+demande[^:\n]{0,60}:\s*([A-Za-z]{2,5})\b", description or "", re.IGNORECASE)
+    return m.group(1).upper() if m else None
+
+
 async def _organismes_panel(chttp) -> dict:
     """Panel bancaire : fiches Comptes « Refinanceur », code extrait de la
-    Description (« Code demande : CAL »). Recette : la recherche Zoho indexe
-    avec un retard de plusieurs minutes, la LISTE non ; on liste donc tout et
-    on filtre côté client."""
-    r = await chttp.get(
-        f"{ZOHO_CRM}/Accounts",
-        params={"fields": "Account_Name,Account_Type,Description,Billing_City", "per_page": 200},
-        headers=await _h(),
-    )
-    if r.status_code != 200:
-        raise RuntimeError(f"liste des comptes refusée : HTTP {r.status_code}")
+    Description (voir _code_organisme). Recettes : la recherche Zoho indexe
+    les fiches avec un retard de plusieurs minutes, mais le critère search
+    (Account_Type:equals:Refinanceur) reste fiable ; l'org dépasse 200
+    comptes donc un GET liste unique peut tronquer : on tente le search en
+    priorité, avec repli sur la liste complète PAGINÉE filtrée côté client."""
+    champs = "Account_Name,Account_Type,Description,Billing_City"
     panel: dict = {}
-    for c in r.json().get("data", []):
-        if _norm(c.get("Account_Type") or "") != "refinanceur":
-            continue
-        m = re.search(r"code\s+demande\s*:\s*([A-Z]{2,5})\b", (c.get("Description") or ""), re.IGNORECASE)
-        if not m:
-            continue
-        panel[m.group(1).upper()] = {
-            "id": str(c.get("id")),
-            "nom": c.get("Account_Name") or "",
-            "ville": c.get("Billing_City") or "",
-        }
+
+    def _absorbe(fiches) -> None:
+        for c in fiches or []:
+            if _norm(c.get("Account_Type") or "") != "refinanceur":
+                continue
+            code = _code_organisme(c.get("Description") or "")
+            if not code or code in panel:
+                continue
+            panel[code] = {
+                "id": str(c.get("id")),
+                "nom": c.get("Account_Name") or "",
+                "ville": c.get("Billing_City") or "",
+            }
+
+    # 1) search par Account_Type : fiable même avec plus de 200 comptes
+    try:
+        r = await chttp.get(
+            f"{ZOHO_CRM}/Accounts/search",
+            params={"criteria": "(Account_Type:equals:Refinanceur)",
+                    "fields": champs, "per_page": 100},
+            headers=await _h(),
+        )
+        if r.status_code == 200:
+            _absorbe(r.json().get("data", []))
+    except Exception:
+        pass
+
+    # 2) repli : liste complète paginée, filtrée côté client
+    if not panel:
+        page = 1
+        while page <= 5:
+            r = await chttp.get(
+                f"{ZOHO_CRM}/Accounts",
+                params={"fields": champs, "per_page": 200, "page": page},
+                headers=await _h(),
+            )
+            if r.status_code != 200:
+                break
+            j = r.json()
+            _absorbe(j.get("data", []))
+            if not (j.get("info") or {}).get("more_records"):
+                break
+            page += 1
+
+    if not panel:
+        raise RuntimeError(
+            "aucune fiche Compte « Refinanceur » avec un code demande lisible "
+            "dans la Description (format attendu « Code demande (DEM-…_ORG_) : CODE »)"
+        )
     return panel
 
 
