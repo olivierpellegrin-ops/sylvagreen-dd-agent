@@ -48,7 +48,9 @@ chaque révision d'un distributeur : une révision = un nouveau devis = une NOUV
   b) enregistrer_demande : crée le dossier = UNE Affaire du Pipeline « Refinancement »,
      étape « Qualification », rattachée au compte client ; nom en préfixe code du dossier
      {CODE}-{NNN} (3 lettres du compte + index à 3 chiffres, propre au compte, croissant,
-     JAMAIS réutilisé, même après une affaire perdue) ;
+     JAMAIS réutilisé, même après une affaire perdue) ; passer à l'outil la durée
+     d'expiration/validité du devis si'elle figure dans la pièce (validite_devis, ex.
+     « 3 mois ») : Closing_Date de l'affaire = date de création + cette durée ;
   c) marquer_devis_traite : renomme le devis brut avec le code ({CODE}-{NNN}_{date}_{nom
      original}) et le recopie sur l'affaire : un devis codé n'est JAMAIS retraité ;
   d) enregistrer_synthese : synthèse de la lecture sur l'affaire (note + fichier

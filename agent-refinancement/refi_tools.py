@@ -30,6 +30,7 @@ import json
 import os
 import re
 import time
+import calendar
 import unicodedata
 from datetime import datetime, timedelta
 
@@ -89,6 +90,30 @@ def _montant_float(montant) -> float | None:
         return float(s) * k
     except ValueError:
         return None
+
+
+def _closing_date(validite: str) -> tuple:
+    """(date_ISO, commentaire) : date de création + durée d'expiration du devis
+    fournisseur (« 3 mois », « 4 mois », « 6 semaines », « 90 jours », « 90 » = jours).
+    Repli si la durée est absente/inconnue : J+90, avec commentaire explicite."""
+    s = (validite or "").strip().lower()
+    base = datetime.now()
+    m = re.search(r"(\d+)\s*(mois|month)", s)
+    if m:
+        mois = int(m.group(1))
+        total = base.month - 1 + mois
+        an, mois_n = base.year + total // 12, total % 12 + 1
+        d = base.replace(year=an, month=mois_n, day=min(base.day, calendar.monthrange(an, mois_n)[1]))
+        return f"{d:%Y-%m-%d}", f"création + {mois} mois (durée d'expiration du devis)"
+    m = re.search(r"(\d+)\s*(sem(?:aine)?s?|week)", s)
+    if m:
+        jours = int(m.group(1)) * 7
+        return f"{base + timedelta(days=jours):%Y-%m-%d}", f"création + {m.group(1)} semaines (durée d'expiration du devis)"
+    m = re.search(r"\d+", s)
+    if m and int(m.group()) > 0:
+        jours = int(m.group())
+        return f"{base + timedelta(days=jours):%Y-%m-%d}", f"création + {jours} jours (durée d'expiration du devis)"
+    return f"{base + timedelta(days=90):%Y-%m-%d}", "durée d'expiration du devis NON indiquée : J+90 par défaut, à corriger dès que la durée est connue"
 
 
 async def _token() -> str:
@@ -387,6 +412,7 @@ async def enregistrer_demande(
     prix_ht: str = "",
     prix_ttc: str = "",
     note: str = "",
+    validite_devis: str = "",
     code_dossier: str = "",
 ) -> str:
     """ENREGISTRE une demande de refinancement d'équipement (étape 1 du process) :
@@ -423,6 +449,10 @@ async def enregistrer_demande(
     décision d'Olivier seul).
     - code_dossier : code explicite « ABC-005 » (utilisé tel quel), ou « ABC »
       (lettres seules : index automatique), ou vide (code déduit du compte).
+    - validite_devis : durée de VALIDITÉ/EXPIRATION du devis fournisseur, lue
+      dans le devis (« 3 mois », « 4 mois », « 6 semaines », « 90 jours »...) :
+      la Closing_Date de l'affaire = date de création + cette durée (règle
+      actée par Olivier). Vide → J+90 par défaut avec avertissement.
     Renvoie JSON {statut: cree, deal_id, dossier, code, index, compte, etape,
     champs, affaires_ouvertes_similaires?, warnings?}."""
     async with httpx.AsyncClient(timeout=60) as chttp:
@@ -487,6 +517,10 @@ async def enregistrer_demande(
                 return json.dumps({"erreur": f"type_produit inconnu : {type_produit}. Valeurs : {libelles}"}, ensure_ascii=False)
 
         # --- 4. fournisseur (distributeur apporteur) ---
+        # Closing_Date : OBLIGATOIRE sur la disposition Refinancement (recette
+        # API) ; règle actée par Olivier : date de création + durée
+        # d'expiration du devis fournisseur.
+        closing_date, closing_comment = _closing_date(validite_devis)
         fournisseur: dict = {}
         warnings: list = []
         if distributeur:
@@ -501,7 +535,7 @@ async def enregistrer_demande(
                     f"Distributeur « {distributeur} » non trouvé dans le CRM : nom tracé dans la description, "
                     f"fiche compte à créer (le rattacher ensuite comme fournisseur)."
                 )
-        warnings.append("Convention : Closing_Date positionnée à J+90 (champ obligatoire du layout Refinancement) : à ajuster quand l'échéance réelle est connue.")
+        warnings.append(f"Closing_Date = {closing_date} ({closing_comment}) ; champ obligatoire du layout Refinancement, à ajuster si l'échéance réelle diffère.")
         if similaires:
             warnings.append(
                 "Affaire(s) Refinancement ouverte(s) sur un équipement proche : "
@@ -518,9 +552,7 @@ async def enregistrer_demande(
             "Pipeline": PIPELINE_REFI,
             "Stage": stage_api,
             "Account_Name": {"id": compte_id},
-            # Closing_Date : OBLIGATOIRE sur la disposition Refinancement (recette
-            # API) ; convention provisoire J+90, à ajuster par Olivier.
-            "Closing_Date": f"{datetime.now() + timedelta(days=90):%Y-%m-%d}",
+            "Closing_Date": closing_date,
             "Equipement_nature_et_marque": equipement,
             "Description": _note("", f"demande enregistrée (canal : {source}"
                                      + (f" ; apportée par {distributeur}" if distributeur else "")
