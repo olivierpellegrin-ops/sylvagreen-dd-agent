@@ -1380,11 +1380,16 @@ async def _organismes_panel(chttp) -> dict:
 
 def _label_organisme(nom_fiche: str, labels: list) -> str | None:
     """Libellé picklist « Organismes sollicités » correspondant au nom de la
-    fiche du panel (mots communs, insensible aux accents). None si aucun."""
+    fiche du panel (mots communs, insensible aux accents). Accepte aussi
+    l'égalité exacte normalisée, sinon les noms à un seul mot (Leasalliance,
+    Leaseworld) ne dépassent jamais le seuil de 2 mots communs. None si aucun."""
+    n_fiche = _norm(nom_fiche or "")
     tokens = [_norm(t) for t in re.split(r"[^a-zA-Z0-9]+", nom_fiche or "") if len(t) >= 4]
     meilleur, score = None, 0
     for lab in labels:
         nl = _norm(lab)
+        if n_fiche and n_fiche == nl:
+            return lab
         s = sum(1 for t in tokens if t and t in nl)
         if s > score:
             meilleur, score = lab, s
