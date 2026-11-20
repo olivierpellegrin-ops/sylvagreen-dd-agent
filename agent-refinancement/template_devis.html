@@ -71,6 +71,12 @@
   .couv-cols .col { padding: 2mm 12mm; font-size: 12px; line-height: 1.6; text-align: left; }
   .couv-cols .col.d { text-align: right; }
   .couv-cols .role { display: block; font-style: italic; color: var(--gris); font-size: 11px; margin-top: 1.5mm; }
+  /* ---- choix assurance sur la page de signature ---- */
+  .bloc-choix { background: #eef4ec; border: 1px solid var(--vert); padding: 4px 11px; margin: 2.5mm 0; }
+  .bloc-choix p { margin: 0 0 1.5mm 0; font-size: 12.6px; }
+  .bloc-choix p:last-child { margin-bottom: 0; }
+  .annexe-item { margin: 0 0 2.2mm 0; }
+  .annexe-item .titre-annexe { font-weight: bold; color: var(--vert-fonce); }
 </style>
 </head>
 <body>
@@ -113,26 +119,27 @@
     <div class="loyer-hero">
       <div class="lab">Votre loyer mensuel</div>
       <div class="val">{{LOYER_HT}}&nbsp;<span class="devise">€ HT / mois</span></div>
-      <div class="sub">loyer fixe pendant {{DUREE_MOIS}} mois, <strong>sans aucun apport à prévoir</strong><br/>
+      <div class="sub">loyer fixe à compter de la mise en service, pendant {{DUREE_MOIS}} mois, <strong>sans aucun apport à prévoir</strong><br/>
       avec l'option « Protection intégrale » (chapitre 4) : <strong>{{LOYER_TC}}&nbsp;€ HT / mois</strong></div>
     </div>
     <table>
       <tr><th style="width:38%">Équipement financé</th><td>{{EQUIPEMENT_LIB}}</td></tr>
       <tr><th>Montant de l'investissement</th><td>{{MONTANT_EQ_HT}}&nbsp;€ HT</td></tr>
       <tr><th>Durée de la location</th><td>{{DUREE_MOIS}} mois · {{NB_LOYERS}} loyers mensuels fixes</td></tr>
-      <tr><th>Apport à prévoir</th><td>aucun : financement à 100&nbsp;% de l'investissement</td></tr>
-      <tr><th>Premier loyer</th><td>à la mise en service de l'équipement</td></tr>
+      <tr><th>Apport à prévoir</th><td>aucun&nbsp;: l'investissement et les acomptes de fabrication sont financés par l'organisme partenaire</td></tr>
+      <tr><th>Acomptes de fabrication</th><td>préfinancés par l'organisme partenaire jusqu'à {{ACOMPTE_PCT}}&nbsp;% de l'équipement, au fur et à mesure de la fabrication</td></tr>
+      <tr><th>Pendant la fabrication</th><td>loyers d'avancement sur les seuls fonds débloqués (échéancier en annexe B) ; le loyer mensuel fixe ci-dessus débute à la mise en service de l'équipement</td></tr>
       <tr><th>Option de cession au terme</th><td>{{VR}}&nbsp;€ HT, payable au moment de la cession</td></tr>
-      <tr><th>Fiscalité</th><td>loyers déductibles du résultat ; TVA sur les loyers récupérable (assujetti)</td></tr>
+      <tr><th>Fiscalité</th><td>loyers déductibles du résultat&nbsp;; TVA sur les loyers récupérable (assujetti)</td></tr>
       <tr><th>Validité de l'offre</th><td>{{VALIDITE_JOURS}} jours à compter du {{DATE_FR}}</td></tr>
     </table>
-    <p>{{EM_NOM}} vous propose le financement en location/cession de l'équipement décrit au chapitre 2. Vous disposez de l'équipement immédiatement, sans mobiliser votre trésorerie : le bien est acquis pour vous par l'organisme de financement partenaire de l'opération, mis à disposition contre un loyer mensuel fixe, puis cédé à votre société au terme du contrat, à sa valeur vénale.</p>
+    <p>{{EM_NOM}} vous propose le financement en location/cession de l'équipement décrit au chapitre 2. Vous disposez de l'équipement sans mobiliser votre trésorerie&nbsp;: les acomptes de fabrication sont d'abord préfinancés pour vous par l'organisme de financement partenaire, puis le bien, acquis pour votre société, est mis à votre disposition contre un loyer mensuel fixe, et cédé à votre société au terme du contrat, à sa valeur vénale.</p>
     <p class="sources">Sources&nbsp;: devis fournisseurs cités au chapitre 2, dossier {{CODE}} (CRM de {{EM_NOM}}).</p>
   </div>
   <div class="page-foot">
     <span><strong>{{EM_NOM}}</strong></span>
     <span>Siret : {{EM_SIRET}} · Devis {{CODE}} v{{VERSION}} · Document confidentiel</span>
-    <span>Page 1 / 5</span>
+    <span>Page 1 / 6</span>
   </div>
 </div>
 
@@ -157,7 +164,7 @@
   <div class="page-foot">
     <span><strong>{{EM_NOM}}</strong></span>
     <span>Siret : {{EM_SIRET}} · Devis {{CODE}} v{{VERSION}} · Document confidentiel</span>
-    <span>Page 2 / 5</span>
+    <span>Page 2 / 6</span>
   </div>
 </div>
 
@@ -169,25 +176,26 @@
   </div>
   <div class="body">
     <h2>3. Le montage location/cession</h2>
-    <p class="sous-chap">Un financement en trois temps, sans mobiliser votre trésorerie</p>
-    <p><strong>Pendant la durée du contrat.</strong> L'organisme de financement partenaire acquiert pour votre société l'équipement neuf décrit au chapitre 2, auprès du fournisseur. L'équipement est mis à votre disposition : vous l'utilisez en totalité, moyennant un loyer mensuel fixe de {{LOYER_HT}}&nbsp;€ HT. Vous ne financez que l'usage : votre trésorerie reste disponible pour votre exploitation.</p>
+    <p class="sous-chap">Un financement en quatre temps, sans mobiliser votre trésorerie</p>
+    <p><strong>Pendant la fabrication de l'équipement.</strong> L'organisme de financement partenaire préfinance pour votre société les acomptes dus aux fournisseurs, jusqu'à {{ACOMPTE_PCT}}&nbsp;% du prix de l'équipement, au fur et à mesure de l'avancement de la fabrication. Pendant cette phase, vous ne réglez que les loyers d'avancement correspondant aux fonds effectivement débloqués.</p>
+    <p><strong>À la mise en service.</strong> L'équipement neuf décrit au chapitre 2 est mis à votre disposition&nbsp;: vous l'utilisez en totalité, moyennant un loyer mensuel fixe. Vous ne financez que l'usage&nbsp;: votre trésorerie reste disponible pour votre exploitation.</p>
     <p><strong>Au terme des {{DUREE_MOIS}} mois.</strong> L'équipement vous est cédé, à sa valeur vénale convenue dès l'origine&nbsp;: {{VR}}&nbsp;€ HT. Votre société devient propriétaire de l'équipement qu'elle a financé.</p>
-    <p><strong>Pendant toute l'opération.</strong> {{EM_NOM}} conduit le montage de bout en bout : structuration du financement avec l'organisme partenaire, suivi de la commande et de la livraison, et coordination des pièces jusqu'à la cession finale.</p>
+    <p><strong>Pendant toute l'opération.</strong> {{EM_NOM}} conduit le montage de bout en bout&nbsp;: structuration du financement avec l'organisme partenaire, suivi de la commande et de la fabrication, et coordination des pièces jusqu'à la cession finale.</p>
     <div class="encadre">
       <strong>Ce que la location/cession vous apporte&nbsp;:</strong>
       <ul style="margin-top:1.5mm">
-        <li><strong>Aucun apport</strong>&nbsp;: l'investissement est financé à 100&nbsp;%, votre trésorerie n'est pas mobilisée et votre capacité d'endettement bancaire est préservée&nbsp;;</li>
+        <li><strong>Aucun apport</strong>&nbsp;: l'investissement et ses acomptes sont financés à 100&nbsp;%, votre trésorerie n'est pas mobilisée et votre capacité d'endettement bancaire est préservée&nbsp;;</li>
         <li><strong>Un loyer fixe</strong>, connu dès la signature, déductible de votre résultat imposable&nbsp;; la TVA sur les loyers est récupérable&nbsp;;</li>
         <li><strong>La maîtrise de votre outil de production</strong>&nbsp;: équipement neuf, gardé au terme du contrat par simple cession à sa valeur vénale.</li>
       </ul>
     </div>
-    <p class="mention">Le contrat de location est établi avec l'organisme de financement partenaire de l'opération ; {{EM_NOM}} en assure la préparation et le suivi. Le traitement comptable (hors bilan en normes françaises) sera confirmé avec votre expert-comptable.</p>
+    <p class="mention">Le contrat de location est établi avec l'organisme de financement partenaire de l'opération&nbsp;; {{EM_NOM}} en assure la préparation et le suivi. Le traitement comptable (hors bilan en normes françaises) sera confirmé avec votre expert-comptable (annexe D).</p>
     <p class="sources">Sources&nbsp;: dossier {{CODE}} (CRM de {{EM_NOM}}), accords de l'organisme partenaire.</p>
   </div>
   <div class="page-foot">
     <span><strong>{{EM_NOM}}</strong></span>
     <span>Siret : {{EM_SIRET}} · Devis {{CODE}} v{{VERSION}} · Document confidentiel</span>
-    <span>Page 3 / 5</span>
+    <span>Page 3 / 6</span>
   </div>
 </div>
 
@@ -200,23 +208,22 @@
   <div class="body">
     <h2>4. Option « Protection intégrale »</h2>
     <p class="sous-chap">L'option qui sécurise votre production et vos dirigeants</p>
-    <p>Votre écorçage travaille des volumes importants : une avarie de machine immobilise toute la ligne. L'option « Protection intégrale » regroupe les trois couvertures utiles à votre exploitation&nbsp;:</p>
+    <p>Votre écorçage travaille des volumes importants&nbsp;: une avarie de machine immobilise toute la ligne. L'option « Protection intégrale » regroupe les trois couvertures utiles à votre exploitation&nbsp;:</p>
     <table>
       <tr><th style="width:30%">Couverture</th><th>Ce qu'elle couvre</th></tr>
       <tr><td><strong>Dommages à l'équipement</strong></td><td>bris de machine, accident, destruction&nbsp;: l'équipement financé est réparé ou remplacé, votre production reprend&nbsp;;</td></tr>
       <tr><td><strong>Perte financière</strong></td><td>en cas de sinistre total, la couverture comble l'écart entre l'indemnité d'assurance et le capital restant dû&nbsp;: aucune somme ne reste à votre charge pour solder le financement&nbsp;;</td></tr>
       <tr><td><strong>Protection des dirigeants</strong></td><td>décès, perte totale et irréversible d'autonomie ou invalidité du dirigeant&nbsp;: les loyers restants sont pris en charge, vos cautions personnelles sont préservées.</td></tr>
     </table>
-    <p>Coût de l'option&nbsp;: <strong>{{LOYER_ASS}}&nbsp;€ HT / mois</strong>, intégrés au loyer mensuel, soit un loyer tout compris de <strong>{{LOYER_TC}}&nbsp;€ HT / mois</strong>. L'option se souscrit à la signature&nbsp;; elle reste facultative.</p>
-    <p><span class="case"></span>&nbsp;&nbsp;<strong>Je souscris l'option « Protection intégrale »</strong>&nbsp;: loyer mensuel tout compris de {{LOYER_TC}}&nbsp;€ HT.</p>
-    <p><span class="case"></span>&nbsp;&nbsp;<strong>Je ne souscris pas l'option</strong>&nbsp;: loyer mensuel de {{LOYER_HT}}&nbsp;€ HT, l'équipement reste à assurer par mes soins (obligation contractuelle).</p>
-    <p class="mention">Les couvertures exactes (franchises, limites, exclusions) seront détaillées dans la notice du contrat. À définir avec l'organisme partenaire le jour de la signature.</p>
+    <p>Coût de l'option&nbsp;: <strong>{{LOYER_ASS}}&nbsp;€ HT / mois</strong>, intégrés au loyer mensuel, soit un loyer tout compris de <strong>{{LOYER_TC}}&nbsp;€ HT / mois</strong>. L'option reste facultative.</p>
+    <p>Vous choisissez au moment de la signature&nbsp;: les deux cases de souscription et de renonciation figurent au chapitre 5, sur la page de signature du devis. Le loyer que vous retenez est ainsi constaté noir sur blanc, à la date de votre signature.</p>
+    <p class="mention">Les couvertures exactes (franchises, limites, exclusions) sont détaillées dans la notice du contrat jointe en annexe C. À définir avec l'organisme partenaire le jour de la signature.</p>
     <p class="sources">Sources&nbsp;: gammes d'assurance de l'organisme de financement partenaire, dossier {{CODE}} (CRM de {{EM_NOM}}).</p>
   </div>
   <div class="page-foot">
     <span><strong>{{EM_NOM}}</strong></span>
     <span>Siret : {{EM_SIRET}} · Devis {{CODE}} v{{VERSION}} · Document confidentiel</span>
-    <span>Page 4 / 5</span>
+    <span>Page 4 / 6</span>
   </div>
 </div>
 
@@ -232,27 +239,62 @@
     <p>{{ACCORD_MENTION}} Les loyers indiqués sont garantis pendant {{VALIDITE_JOURS}} jours à compter de la date du présent devis. Passé ce délai, une nouvelle version sera établie.</p>
     <table>
       <tr><th style="width:38%">Livraison de l'équipement</th><td>{{LIVRAISON_TXT}}</td></tr>
-      <tr><th>Début des loyers</th><td>à la mise en service, constatée par procès-verbal de réception</td></tr>
-      <tr><th>Loyers</th><td>{{NB_LOYERS}} loyers mensuels de {{LOYER_HT}}&nbsp;€ HT, prélèvements mensuels</td></tr>
+      <tr><th>Loyers d'avancement</th><td>pendant la fabrication, sur les fonds débloqués&nbsp;: échéancier détaillé joint en annexe B</td></tr>
+      <tr><th>Loyers</th><td>{{NB_LOYERS}} loyers mensuels, prélèvements mensuels</td></tr>
+      <tr><th>Périodicité des prélèvements</th><td>mensuelle&nbsp;; une périodicité trimestrielle peut être étudiée sur demande, sur la base du barème de l'organisme partenaire</td></tr>
+      <tr><th>Premier loyer mensuel fixe</th><td>à la mise en service, constatée par procès-verbal de réception</td></tr>
       <tr><th>Option de cession</th><td>{{VR}}&nbsp;€ HT au terme des {{DUREE_MOIS}} mois</td></tr>
-      <tr><th>Assurance de l'équipement</th><td>obligatoire&nbsp;: couvertures au choix au chapitre 4</td></tr>
+      <tr><th>Assurance de l'équipement</th><td>obligatoire&nbsp;: couvertures au choix au chapitre 4, notice jointe en annexe C</td></tr>
     </table>
-    <h2 style="margin-top:4mm">Annexe chiffrée</h2>
-    <table>
-      <tr><th style="width:38%">Total des loyers sur la durée</th><td class="num">{{TOTAL_LOYERS}}&nbsp;€ HT</td></tr>
-      <tr><th>Option de cession au terme</th><td class="num">{{VR}}&nbsp;€ HT</td></tr>
-      <tr><th>Coût total du financement</th><td class="num">{{COUT_TOTAL}}&nbsp;€ HT</td></tr>
-    </table>
-    <p class="mention">L'annexe est fournie à titre de transparence. Votre engagement se lit chaque mois&nbsp;: le loyer fixe ci-dessus.</p>
-    <p>Pour donner suite, il vous suffit de porter vos initiales sur la case du chapitre 4 et de dater le présent devis ci-dessous. {{EM_NOM}} prépare ensuite le contrat de location/cession avec l'organisme partenaire et suit la commande de l'équipement jusqu'à sa mise en service.</p>
-    <p style="margin-top:4mm">Fait à <span class="ligne-a-remplir"></span>, le <span class="ligne-a-remplir" style="width:35mm"></span></p>
+    <div class="bloc-choix">
+      <p style="margin-bottom:1.5mm"><strong>Option « Protection intégrale » (chapitre 4)&nbsp;: votre choix avant signature</strong></p>
+      <p><span class="case"></span>&nbsp;&nbsp;<strong>Je souscris l'option « Protection intégrale »</strong>&nbsp;: loyer mensuel tout compris de <strong>{{LOYER_TC}}&nbsp;€ HT</strong>.</p>
+      <p><span class="case"></span>&nbsp;&nbsp;<strong>Je ne souscris pas l'option</strong>&nbsp;: loyer mensuel de <strong>{{LOYER_HT}}&nbsp;€ HT</strong>, l'équipement reste à assurer par mes soins (obligation contractuelle).</p>
+    </div>
+    <p>Pour donner suite, il vous suffit de cocher l'une des deux cases ci-dessus, puis de dater et signer le présent devis ci-dessous. Le loyer retenu est celui de la case cochée, à la date de votre signature. {{EM_NOM}} prépare ensuite le contrat de location/cession avec l'organisme partenaire et suit la commande de l'équipement jusqu'à sa mise en service.</p>
+    <p style="margin-top:3mm">Fait à <span class="ligne-a-remplir"></span>, le <span class="ligne-a-remplir" style="width:35mm"></span></p>
     <p style="margin-top:3mm">Nom et qualité du signataire&nbsp;: <span class="ligne-a-remplir" style="width:75mm"></span></p>
     <p>Bon pour accord, date et signature&nbsp;:</p>
   </div>
   <div class="page-foot">
     <span><strong>{{EM_NOM}}</strong></span>
     <span>Siret : {{EM_SIRET}} · Devis {{CODE}} v{{VERSION}} · Document confidentiel</span>
-    <span>Page 5 / 5</span>
+    <span>Page 5 / 6</span>
+  </div>
+</div>
+
+<!-- ================= PAGE 6 : ANNEXES ================= -->
+<div class="sheet">
+  <div class="page-head">
+    <img src="data:image/png;base64,{{LOGO}}" alt="{{EM_NOM_MAJ}}" />
+    <div class="doc-ref"><strong>Devis de location/cession</strong><br/>{{CLIENT_NOM}} · Dossier {{CODE}}, version {{VERSION}}<br/>Date : {{DATE_FR}}</div>
+  </div>
+  <div class="body">
+    <h2>6. Annexes au présent devis</h2>
+    <p class="sous-chap">Les documents ci-dessous sont joints au présent devis et en font partie intégrante</p>
+    <div class="annexe-item">
+      <p><span class="titre-annexe">Annexe A · Devis fournisseurs et descriptif de l'équipement</span></p>
+      <p>Les devis établis par les fournisseurs de l'équipement financé, référencés au chapitre 2. Ils identifient précisément les biens financés&nbsp;: désignation, références constructeur, caractéristiques techniques et prix. Ils servent de base à la commande passée par l'organisme de financement partenaire.</p>
+    </div>
+    <div class="annexe-item">
+      <p><span class="titre-annexe">Annexe B · Plan de financement des acomptes et échéancier</span></p>
+      <p>L'état des acomptes de fabrication préfinancés par l'organisme partenaire (montants et dates d'appel, dans la limite de {{ACOMPTE_PCT}}&nbsp;% de l'équipement), les loyers d'avancement correspondants pendant la fabrication, puis l'échéancier des {{NB_LOYERS}} loyers mensuels et de l'option de cession. Ce document constate vos engagements de trésorerie dans le temps&nbsp;; il vous est remis pour information avant la signature du contrat.</p>
+    </div>
+    <div class="annexe-item">
+      <p><span class="titre-annexe">Annexe C · Assurance de l'équipement</span></p>
+      <p>Le preneur supporte les risques de l'équipement pendant toute la location&nbsp;: l'assurance dommages est obligatoire. Cette annexe précise, selon votre choix exprimé au chapitre 5, soit l'attestation de votre propre police d'assurance couvrant l'équipement financé, soit la notice et les conditions de la police « Protection intégrale » proposée par l'organisme partenaire (couvertures, franchises, limites, exclusions).</p>
+    </div>
+    <div class="annexe-item">
+      <p><span class="titre-annexe">Annexe D · Notice fiscale et comptable</span></p>
+      <p>Le traitement fiscal et comptable de l'opération&nbsp;: déductibilité des loyers, TVA sur les loyers et sur l'option de cession, conditions de l'enregistrement à votre bilan en normes françaises. Cette notice est destinée à votre expert-comptable&nbsp;; elle ne constitue pas un conseil fiscal individualisé.</p>
+    </div>
+    <p class="mention">Les annexes sont jointes au présent devis dans leur version en vigueur à la date de signature. Toute version remise à jour en cours d'exécution vous sera transmise pour information.</p>
+    <p class="sources">Sources&nbsp;: dossier {{CODE}} (CRM de {{EM_NOM}}), accords de l'organisme partenaire.</p>
+  </div>
+  <div class="page-foot">
+    <span><strong>{{EM_NOM}}</strong></span>
+    <span>Siret : {{EM_SIRET}} · Devis {{CODE}} v{{VERSION}} · Document confidentiel</span>
+    <span>Page 6 / 6</span>
   </div>
 </div>
 
