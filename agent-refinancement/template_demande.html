@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8" />
+<title>Demande de refinancement — {{DOSSIER_LIB}} — Dossier {{CODE}}</title>
+<style>
+  :root { --vert: #2c5a1e; --vert-fonce: #1d3a14; --gris: #555; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; background: #fff; }
+  body { font-family: Georgia, "DejaVu Serif", "Times New Roman", serif; color: #222; }
+  @page { size: A4; margin: 0; }
+  .sheet {
+    width: 210mm; height: 296mm; background: #fff;
+    margin: 0 auto; padding: 11mm 16mm 8mm 16mm;
+    display: flex; flex-direction: column;
+    page-break-after: always; break-after: page;
+    position: relative;
+  }
+  .sheet:last-child { page-break-after: auto; break-after: auto; }
+  .page-head {
+    display: flex; justify-content: space-between; align-items: center;
+    border-bottom: 1.5px solid var(--vert); padding-bottom: 2mm; margin-bottom: 4mm;
+  }
+  .page-head img { height: 11mm; }
+  .page-head .doc-ref { text-align: right; font-size: 10.5px; color: var(--vert-fonce); line-height: 1.35; }
+  .page-head .doc-ref strong { font-size: 11.5px; letter-spacing: .3px; }
+  .body { flex: 1 1 auto; overflow: hidden; }
+  h2 { font-size: 13.5px; color: var(--vert); border-bottom: 1px solid var(--vert); padding-bottom: 1px; margin: 3mm 0 1.5mm 0; text-transform: uppercase; letter-spacing: .4px; }
+  p, li { font-size: 13px; line-height: 1.38; text-align: justify; margin: 0 0 1.2mm 0; }
+  ul { margin: 0 0 1.2mm 0; padding-left: 16px; }
+  li { margin-bottom: .5mm; }
+  table { width: 100%; border-collapse: collapse; font-size: 12.5px; margin: 1.5mm 0; }
+  th, td { border: 1px solid #b9c7b2; padding: 4px 8px; text-align: left; }
+  th { background: #e7efe3; color: var(--vert-fonce); }
+  td.num, th.num { text-align: right; white-space: nowrap; }
+  .encadre { background: #eef4ec; border-left: 3px solid var(--vert); padding: 5px 11px; margin: 2mm 0; font-size: 12.4px; line-height: 1.42; text-align: justify; }
+  .mention { font-size: 11.6px; color: var(--gris); }
+  .page-foot {
+    border-top: 1.5px solid var(--vert); padding-top: 1.8mm; margin-top: 3mm;
+    display: flex; justify-content: space-between; align-items: center;
+    font-size: 9.5px; color: #333;
+  }
+  .page-foot strong { color: var(--vert-fonce); }
+  .todo { color: #8a8f8a; font-style: italic; }
+  /* ---- couverture ---- */
+  .cover .body { display: flex; flex-direction: column; justify-content: center; align-items: center; text-align: center; }
+  .cover .logo-couv { height: 18mm; margin: 0 auto 14mm auto; display: block; }
+  .titre-couv { font-size: 28px; color: var(--vert-fonce); text-transform: uppercase; letter-spacing: 2px; margin: 0 auto; line-height: 1.3; text-align: center; }
+  .cover .couv-cols { position: absolute; left: 16mm; right: 16mm; bottom: 18mm; display: grid; grid-template-columns: 1fr 2px 1fr; align-items: stretch; }
+  .couv-cols .sep { background: var(--vert); }
+  .couv-cols .col { padding: 2mm 12mm; font-size: 12px; line-height: 1.55; }
+  .couv-cols .col.g { text-align: left; }
+  .couv-cols .col.d { text-align: right; }
+  .couv-cols .role { display: block; margin-top: 2.5mm; font-style: italic; color: var(--gris); font-size: 11px; }
+  /* ---- chapitres ---- */
+  .sous-chap { font-size: 12.6px; color: var(--gris); font-style: italic; margin: -0.3mm 0 1.8mm 0; }
+  p.aise { margin-top: 3.2mm; }
+  .sources { font-size: 11px; color: var(--gris); font-style: italic; margin: 2.2mm 0 2.5mm 0; }
+  .a-remplir { color: #444; }
+  .case { display: inline-block; width: 9px; height: 9px; border: 1.2px solid #333; margin-right: 2px; }
+</style>
+</head>
+<body>
+
+<!-- ================= COUVERTURE ================= -->
+<div class="sheet cover">
+  <div class="body">
+    <img class="logo-couv" src="data:image/png;base64,{{LOGO}}" alt="{{EM_NOM}}" />
+    <p class="titre-couv">Demande<br/>de refinancement</p>
+  </div>
+  <div class="couv-cols">
+    <div class="col g">
+      <strong>{{EM_NOM_MAJ}}</strong><br/>
+      représentée par {{EM_REPRESENTANT}}<br/>
+      {{EM_ADRESSE}}<br/>
+      Tél. : {{EM_TEL}}<br/>
+      {{EM_EMAIL}}
+      <span class="role">«&nbsp;l'auteur de la demande&nbsp;»</span>
+    </div>
+    <div class="sep"></div>
+    <div class="col d">
+      {{COUV_ORG}}
+    </div>
+  </div>
+</div>
+
+<!-- ================= PAGE 1 ================= -->
+<div class="sheet">
+  <div class="page-head">
+    <img src="data:image/png;base64,{{LOGO}}" alt="{{EM_NOM}}" />
+    <div class="doc-ref"><strong>Demande de refinancement</strong><br/>{{DOC_ORG}} — Dossier {{CODE}} ({{DOSSIER_LIB}})<br/>Date : {{DATE_FR}}</div>
+  </div>
+  <div class="body">
+{{PAGE1_BODY}}
+  </div>
+  <div class="page-foot">
+    <span><strong>{{EM_NOM}}</strong></span>
+    <span>Siret : {{EM_SIRET}} — Document confidentiel</span>
+    <span>Page 1 / 5</span>
+  </div>
+</div>
+
+<!-- ================= PAGE 2 ================= -->
+<div class="sheet">
+  <div class="page-head">
+    <img src="data:image/png;base64,{{LOGO}}" alt="{{EM_NOM}}" />
+    <div class="doc-ref"><strong>Demande de refinancement</strong><br/>{{DOC_ORG}} — Dossier {{CODE}} ({{DOSSIER_LIB}})<br/>Date : {{DATE_FR}}</div>
+  </div>
+  <div class="body">
+{{PAGE2_BODY}}
+  </div>
+  <div class="page-foot">
+    <span><strong>{{EM_NOM}}</strong></span>
+    <span>Siret : {{EM_SIRET}} — Document confidentiel</span>
+    <span>Page 2 / 5</span>
+  </div>
+</div>
+
+<!-- ================= PAGE 3 ================= -->
+<div class="sheet">
+  <div class="page-head">
+    <img src="data:image/png;base64,{{LOGO}}" alt="{{EM_NOM}}" />
+    <div class="doc-ref"><strong>Demande de refinancement</strong><br/>{{DOC_ORG}} — Dossier {{CODE}} ({{DOSSIER_LIB}})<br/>Date : {{DATE_FR}}</div>
+  </div>
+  <div class="body">
+{{PAGE3_BODY}}
+  </div>
+  <div class="page-foot">
+    <span><strong>{{EM_NOM}}</strong></span>
+    <span>Siret : {{EM_SIRET}} — Document confidentiel</span>
+    <span>Page 3 / 5</span>
+  </div>
+</div>
+
+<!-- ================= PAGE 4 ================= -->
+<div class="sheet">
+  <div class="page-head">
+    <img src="data:image/png;base64,{{LOGO}}" alt="{{EM_NOM}}" />
+    <div class="doc-ref"><strong>Demande de refinancement</strong><br/>{{DOC_ORG}} — Dossier {{CODE}} ({{DOSSIER_LIB}})<br/>Date : {{DATE_FR}}</div>
+  </div>
+  <div class="body">
+{{PAGE4_BODY}}
+  </div>
+  <div class="page-foot">
+    <span><strong>{{EM_NOM}}</strong></span>
+    <span>Siret : {{EM_SIRET}} — Document confidentiel</span>
+    <span>Page 4 / 5</span>
+  </div>
+</div>
+
+<!-- ================= PAGE 5 : RÉPONSE DE L'ORGANISME ================= -->
+<div class="sheet">
+  <div class="page-head">
+    <img src="data:image/png;base64,{{LOGO}}" alt="{{EM_NOM}}" />
+    <div class="doc-ref"><strong>Demande de refinancement</strong><br/>{{DOC_ORG}} — Dossier {{CODE}} ({{DOSSIER_LIB}})<br/>Date : {{DATE_FR}}</div>
+  </div>
+  <div class="body">
+{{PAGE5_BODY}}
+  </div>
+  <div class="page-foot">
+    <span><strong>{{EM_NOM}}</strong></span>
+    <span>Siret : {{EM_SIRET}} — Document confidentiel</span>
+    <span>Page 5 / 5</span>
+  </div>
+</div>
+
+</body>
+</html>

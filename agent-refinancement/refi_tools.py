@@ -15,6 +15,14 @@ Progression : étapes 1-2 outillées ; convention actée « 1 devis = 1 affaire 
   codé n'est jamais retraité.
 - enregistrer_synthese : Note Zoho + fichier SYN-{CODE}_{date}.txt sur l'affaire.
 - lire_synthese : relit les synthèses (notes + fichiers SYN-) d'un dossier.
+- generer_demande_refinancement : génère la DEMANDE DE REFINANCEMENT
+  officielle (PDF charte SylvaGreen, 5 pages + couverture, page de réponse à
+  compléter et signer par l'organisme) à destination du (ou des) organisme(s)
+  bancaire(s) du panel ; un exemplaire NOMINATIF par organisme ; chaque
+  exemplaire est posé sur l'affaire sous DEM-{CODE}_{ORG}_{date}.pdf.
+  Les réponses des organismes suivent la convention REP-{CODE}_{ORG}_{date}
+  (fichier) + note « Réponse {ORG} ». Les préfixes DEM- et REP- sont traités
+  comme des fichiers déjà traités : jamais retraités, jamais renommés.
 
 Les devis fournisseur bruts sont déposés par Olivier sur le COMPTE client
 (parking) sous un nom NON codé ; le préfixe SYN- est réservé aux synthèses.
@@ -308,9 +316,10 @@ def _code_client(nom: str) -> str:
 
 
 def _est_traite(nom_fichier: str) -> bool:
-    """Fichier déjà traité : synthèse (SYN-) ou devis codé (code dossier en tête)."""
+    """Fichier déjà traité : synthèse (SYN-), demande/réponse organisme
+    (DEM-/REP-) ou devis codé (code dossier en tête)."""
     n = (nom_fichier or "").strip()
-    if n.upper().startswith("SYN-"):
+    if n.upper().startswith(("SYN-", "DEM-", "REP-")):
         return True
     return bool(re.match(r"^[A-Za-z]{2,4}[-_]\d{3}(_|[-.])", n))
 
@@ -1167,4 +1176,719 @@ async def lire_synthese(dossier: str = "", client: str = "") -> str:
             "notes": notes or None,
             "fichiers": fichiers or None,
             "message": "Synthèses lues : s'appuyer uniquement sur ce contenu, sans rien inventer au-delà.",
+        }, ensure_ascii=False)
+
+# ---------------------------------------------------------------------------
+# Étape 3 — demande de refinancement officielle (nominative par organisme)
+# ---------------------------------------------------------------------------
+from html import escape as _esc
+
+EMETTEUR = {
+    # Émetteur du contrat de demande de refinancement. SylvaGreen Conseils
+    # aujourd'hui ; basculer vers SylvaGreen Management (holding) quand elle
+    # aura son SIRET : ne changer QUE ce dictionnaire.
+    "nom": "SylvaGreen Conseils",
+    "nom_maj": "SYLVAGREEN CONSEILS",
+    "representant": "M. Olivier PELLEGRIN",
+    "fonction": "gérant",
+    "adresse": "14, Le Sirieix\u00a0— 19220 Bassignac-le-Haut",
+    "tel": "06\u00a017\u00a079\u00a039\u00a008",
+    "email": "olivier.pellegrin@sylvagreen.consulting",
+    "siret": "450 479 407 00055",
+}
+
+CHAMP_ORGANISMES = "Organismes_sollicit_s"
+
+_REPO_FILES: dict = {}
+
+
+def _fichier_repo(nom: str) -> str:
+    """Fichier livré avec le worker (template, logo), lu une seule fois."""
+    if nom not in _REPO_FILES:
+        chemin = os.path.join(os.path.dirname(os.path.abspath(__file__)), nom)
+        with open(chemin, "r", encoding="utf-8") as f:
+            _REPO_FILES[nom] = f.read()
+    return _REPO_FILES[nom]
+
+
+def _fmt_eur(x, prefix: str = "") -> str:
+    """714203 -> « 714 203 € » (séparateur insécable). None -> « — »."""
+    if x is None:
+        return "—"
+    try:
+        v = float(x)
+    except (TypeError, ValueError):
+        return _esc(str(x))
+    s = f"{v:,.0f}".replace(",", "\u00a0")
+    return f"{prefix}{s}\u00a0€"
+
+
+def _fmt_signe_pct(x) -> str:
+    """20.8 -> « +20,8 % » (le registre exprime la croissance en pourcentage)."""
+    if x is None:
+        return "—"
+    try:
+        v = float(x)
+    except (TypeError, ValueError):
+        return _esc(str(x))
+    s = f"{v:+,.1f}".replace(",", "\u00a0").replace(".", ",")
+    return f"{s}\u00a0%"
+
+
+def _fmt_pct(x) -> str:
+    if x is None:
+        return "—"
+    return ("%.1f" % x).replace(".", ",") + "\u00a0%"
+
+
+def _annee_de(exercice) -> str:
+    """« 31/12/2025 » ou 2025 -> « 2025 » (dernier groupe de 4 chiffres)."""
+    m = re.search(r"(\d{4})", str(exercice or ""))
+    return m.group(1) if m else str(exercice or "—")
+
+
+def _siren_affiche(siren: str) -> str:
+    s = (siren or "").strip()
+    return f"{s[0:3]}\u00a0{s[3:6]}\u00a0{s[6:9]}" if len(s) == 9 else _esc(s or "—")
+
+
+def _date_fr(v) -> str:
+    try:
+        return datetime.strptime(str(v)[:10], "%Y-%m-%d").strftime("%d/%m/%Y")
+    except Exception:
+        return _esc(str(v)) if v else "—"
+
+
+def _mn_pc(rn, ca) -> float | None:
+    """Marge nette en % (None si données absentes ou CA nul)."""
+    try:
+        return rn / ca * 100 if (rn is not None and ca) else None
+    except (TypeError, ZeroDivisionError):
+        return None
+
+
+async def _fiche_pappers(chttp, siren: str) -> dict:
+    """Fiche registre national : identité, dirigeants, finances (3 derniers
+    exercices), siège. Lève RuntimeError avec un message clair si indisponible."""
+    r = await chttp.get(f"{PAPPERS_API}/entreprise", params={"siren": siren, "api_token": os.environ.get("PAPPERS_API_KEY", "")})
+    if r.status_code in (402, 403, 429):
+        raise RuntimeError(f"registre national indisponible (HTTP {r.status_code}, crédits Pappers ?) : réessayer plus tard")
+    if r.status_code != 200:
+        raise RuntimeError(f"registre national : HTTP {r.status_code}")
+    d = r.json() or {}
+    identite = {
+        "raison_sociale": d.get("nom_entreprise"),
+        "forme_juridique": d.get("forme_juridique"),
+        "date_creation": d.get("date_creation"),
+        "capital": d.get("capital"),
+        "effectif": (d.get("finances") or [{}])[0].get("effectif") if d.get("finances") else None,
+        "naf": (d.get("libelle_naf") or d.get("naf")),
+    }
+    dirigeants = [
+        {"nom": " ".join(x for x in (dg.get("prenom"), dg.get("nom")) if x), "qualite": dg.get("qualite")}
+        for dg in (d.get("dirigeants") or [])
+    ]
+    vus: dict = {}
+    for f in (d.get("finances") or []):
+        an = f.get("annee")
+        if an is None:
+            continue
+        prev = vus.get(an)
+        if prev is None or (not prev.get("date_de_cloture_exercice") and f.get("date_de_cloture_exercice")):
+            vus[an] = f
+    finances = [
+        {"exercice": f.get("date_de_cloture_exercice") or str(f.get("annee") or ""),
+         "annee": _annee_de(f.get("annee") or f.get("date_de_cloture_exercice")),
+         "ca": f.get("chiffre_affaires"),
+         "resultat_net": f.get("resultat"),
+         "croissance_ca": f.get("taux_croissance_chiffre_affaires")}
+        for f in [vus[a] for a in sorted(vus, reverse=True)][:3]
+    ]
+    return {"identite": identite, "dirigeants": dirigeants, "finances": finances, "siege": d.get("siege") or {}}
+
+
+async def _organismes_panel(chttp) -> dict:
+    """Panel bancaire : fiches Comptes « Refinanceur », code extrait de la
+    Description (« Code demande : CAL »). Recette : la recherche Zoho indexe
+    avec un retard de plusieurs minutes, la LISTE non ; on liste donc tout et
+    on filtre côté client."""
+    r = await chttp.get(
+        f"{ZOHO_CRM}/Accounts",
+        params={"fields": "Account_Name,Account_Type,Description,Billing_City", "per_page": 200},
+        headers=await _h(),
+    )
+    if r.status_code != 200:
+        raise RuntimeError(f"liste des comptes refusée : HTTP {r.status_code}")
+    panel: dict = {}
+    for c in r.json().get("data", []):
+        if _norm(c.get("Account_Type") or "") != "refinanceur":
+            continue
+        m = re.search(r"code\s+demande\s*:\s*([A-Z]{2,5})\b", (c.get("Description") or ""), re.IGNORECASE)
+        if not m:
+            continue
+        panel[m.group(1).upper()] = {
+            "id": str(c.get("id")),
+            "nom": c.get("Account_Name") or "",
+            "ville": c.get("Billing_City") or "",
+        }
+    return panel
+
+
+def _label_organisme(nom_fiche: str, labels: list) -> str | None:
+    """Libellé picklist « Organismes sollicités » correspondant au nom de la
+    fiche du panel (mots communs, insensible aux accents). None si aucun."""
+    tokens = [_norm(t) for t in re.split(r"[^a-zA-Z0-9]+", nom_fiche or "") if len(t) >= 4]
+    meilleur, score = None, 0
+    for lab in labels:
+        nl = _norm(lab)
+        s = sum(1 for t in tokens if t and t in nl)
+        if s > score:
+            meilleur, score = lab, s
+    return meilleur if score >= 2 else None
+
+
+async def _maj_organismes_sollicites(chttp, deal_id: str, labels: list) -> bool:
+    """Écrit le multiselect Organismes_sollicit_s (fusion des valeurs déjà
+    présentes), puis VÉRIFIE en relecture (recette : Zoho répond SUCCESS
+    silencieusement même sans écrire). Renvoie True si confirmé."""
+    r = await chttp.get(
+        f"{ZOHO_CRM}/Deals",
+        params={"ids": deal_id, "fields": CHAMP_ORGANISMES},
+        headers=await _h(),
+    )
+    actuel: list = []
+    if r.status_code == 200:
+        v = (r.json().get("data") or [{}])[0].get(CHAMP_ORGANISMES)
+        if isinstance(v, str):
+            actuel = [x for x in v.split(";") if x]
+        elif isinstance(v, list):
+            actuel = list(v)
+    fusion = list(dict.fromkeys([a for a in actuel if a] + labels))
+    for candidat in (fusion, ";".join(fusion)):
+        r = await chttp.put(
+            f"{ZOHO_CRM}/Deals",
+            json={"data": [{"id": deal_id, CHAMP_ORGANISMES: candidat}]},
+            headers=await _h(),
+        )
+        if r.status_code >= 400:
+            continue
+        rr = await chttp.get(
+            f"{ZOHO_CRM}/Deals",
+            params={"ids": deal_id, "fields": CHAMP_ORGANISMES},
+            headers=await _h(),
+        )
+        if rr.status_code != 200:
+            continue
+        v = (rr.json().get("data") or [{}])[0].get(CHAMP_ORGANISMES)
+        lus = v.split(";") if isinstance(v, str) else (v or [])
+        if lus and set(labels) <= {str(x) for x in lus}:
+            return True
+    return False
+
+
+def _pdf_depuis_html(html_final: str) -> bytes:
+    """PDF A4 via WeasyPrint (import paresseux : la lib n'est pas requise pour
+    compiler le module hors worker)."""
+    import io as _io
+
+    from weasyprint import HTML
+
+    buf = _io.BytesIO()
+    HTML(string=html_final).write_pdf(buf)
+    return buf.getvalue()
+
+
+def _table_grille(montant: float, durees: list, apports: list, vide: bool) -> str:
+    """Grille de taux apport × durée. vide=True : page de réponse (cellules
+    vides) ; vide=False : corps de la demande (taux à compléter « ……… % »)."""
+    ths = "".join(f'<th class="num">{d}\u00a0mois ({d // 12}\u00a0ans)</th>' for d in durees)
+    rows = []
+    for p in apports:
+        lib = "Sans apport (0\u00a0%)" if p == 0 else f"Apport {p}\u00a0% ({_fmt_eur(round(montant * p / 100))})"
+        motif = "&nbsp;" if vide else "…………&nbsp;%"
+        cells = "".join(f'<td class="num a-remplir">{motif}</td>' for _ in durees)
+        rows.append(f"<tr><td>{lib}</td>{cells}</tr>")
+    return f'<table><tr><th style="width:34%">Apport en comptant</th>{ths}</tr>{"".join(rows)}</table>'
+
+
+def _page1_body(code, societe, nom_org, date_fr, validite, fins, devis_cites, ident) -> str:
+    annees = [f["annee"] for f in fins]
+    if fins:
+        src_fin = f"Les données financières proviennent des comptes publiés ({'exercices ' + annees[-1] + ' à ' + annees[0] if len(annees) > 1 else 'exercice ' + annees[0]})"
+    else:
+        src_fin = "Les données financières seront transmises sur demande (liasses fiscales)"
+    src_devis = "des devis fournisseurs cités au chapitre 4" if devis_cites else f"du dossier {code} (CRM de {EMETTEUR['nom']})"
+    return f"""
+    <h2>1. Objet de la demande</h2>
+    <p class="sous-chap">Une demande officielle de financement en location/cession, adressée nominativement à l'organisme destinataire</p>
+    <div class="encadre">La présente demande de refinancement est adressée par {EMETTEUR['nom']}, apporteur de l'opération, au nom de la société {_esc(societe)}, bénéficiaire du financement, à l'attention de {_esc(nom_org)}, organisme destinataire du présent exemplaire, en vue de la location, avec cession finale, de l'équipement décrit au chapitre 4. L'organisme destinataire est invité à y répondre par oui ou par non, au moyen de la page de signature du présent document, en proposant et en garantissant un taux nominal annuel selon la grille du chapitre 5.</div>
+    <p>Le montage retenu est la location/cession&nbsp;: l'organisme acquiert l'équipement neuf auprès du fournisseur, le loue à la société pendant la durée du contrat, puis lui cède l'équipement au terme du contrat, à sa valeur vénale. L'opération est portée par SylvaGreen, spécialiste du financement durable des entreprises de la filière bois.</p>
+    <p class="aise">La présente demande contractualise un engagement. Le projet décrit aux chapitres 3 et 4 est d'ores et déjà engagé&nbsp;: la société a signé un mandat de recherche de financement, et l'opération sera conduite avec l'organisme dont la proposition sera retenue. Un exemplaire nominatif du présent document est adressé à chaque organisme consulté&nbsp;; chacun répond sur l'exemplaire reçu, en son nom propre. La réponse, taux compris, engage l'organisme qui la signe, pendant une durée de {validite} jours.</p>
+    <p>Ce document est rattaché au dossier {_esc(code)} et reflète la situation de la société à la date du {_esc(date_fr)}. {src_fin}&nbsp;; les données techniques proviennent {src_devis}.</p>
+    <p class="sources">Sources&nbsp;: comptes publiés de la société (registre national des entreprises), devis fournisseurs cités, CRM de {EMETTEUR['nom']}.</p>
+
+    <h2>2. La société en un coup d'œil</h2>
+    <p class="sous-chap">Fiche d'identité au {_esc(date_fr)}</p>
+    <table>
+      <tr><th style="width:30%">Dénomination</th><td>{_esc(societe)}</td></tr>
+      <tr><th>Forme juridique</th><td>{ident['forme']}</td></tr>
+      <tr><th>Immatriculation</th><td>SIREN {ident['siren']}</td></tr>
+      <tr><th>Siège social</th><td>{ident['siege']}</td></tr>
+      <tr><th>Date de création</th><td>{ident['cree_le']}</td></tr>
+      <tr><th>Capital social</th><td>{ident['capital']}</td></tr>
+      <tr><th>Activité (NAF)</th><td>{ident['naf']}</td></tr>
+      <tr><th>Effectif</th><td>{ident['effectif']}</td></tr>
+      <tr><th>Dirigeants</th><td>{ident['dirigeants']}</td></tr>
+    </table>
+    <p class="sources">Sources&nbsp;: registre national des entreprises, CRM de {EMETTEUR['nom']}. Mention «&nbsp;—&nbsp;»&nbsp;: donnée non disponible au registre à ce jour.</p>
+"""
+
+
+def _page2_body(fins) -> str:
+    if not fins:
+        return """
+    <h2>3. Lecture financière</h2>
+    <p class="sous-chap">Trois exercices publiés, une trajectoire lisible</p>
+    <p>Les comptes annuels de la société n'ont pas pu être lus au registre national des entreprises à la date d'établissement de la demande. Les liasses fiscales des derniers exercices seront transmises à l'organisme sur simple demande.</p>
+"""
+    tetes = "".join(f'<th class="num">Exercice {f["annee"]}</th>' for f in reversed(fins))
+
+    def ligne(libelle: str, fmt) -> str:
+        cells = "".join(
+            f'<td class="num">{fmt(f) if fmt(f) is not None else "—"}</td>' for f in reversed(fins)
+        )
+        return f'<tr><td style="width:34%">{libelle}</td>{cells}</tr>'
+
+    ligne_mn = ligne("Marge nette (résultat net / CA)", lambda f: _fmt_pct(_mn_pc(f.get("resultat_net"), f.get("ca"))))
+    dernier = fins[0]
+    analyse = ""
+    if len(fins) > 1 and fins[1].get("ca") and dernier.get("ca"):
+        analyse = f"Sur l'exercice {dernier['annee']}, le chiffre d'affaires s'établit à {_fmt_eur(dernier['ca'])}, contre {_fmt_eur(fins[1]['ca'])} sur l'exercice {fins[1]['annee']}"
+        if dernier.get("croissance_ca") is not None:
+            analyse += f" ({_fmt_signe_pct(dernier['croissance_ca'])})"
+        analyse += "."
+    else:
+        analyse = f"L'exercice {dernier['annee']} publie un chiffre d'affaires de {_fmt_eur(dernier.get('ca'))}."
+    if dernier.get("resultat_net") is not None:
+        analyse += f" Le résultat net s'établit à {_fmt_eur(dernier['resultat_net'])}"
+        mn0 = _mn_pc(dernier.get("resultat_net"), dernier.get("ca"))
+        if mn0 is not None:
+            analyse += f", soit une marge nette de {_fmt_pct(mn0).replace(chr(160), ' ').strip()}"
+        analyse += "."
+    mn0 = _mn_pc(dernier.get("resultat_net"), dernier.get("ca"))
+    mn1 = _mn_pc(fins[1].get("resultat_net"), fins[1].get("ca")) if len(fins) > 1 else None
+    croiss = dernier.get("croissance_ca")
+    if (dernier.get("resultat_net") or 0) <= 0:
+        encadre = f"Le dernier exercice publie un résultat net de {_fmt_eur(dernier['resultat_net'])}&nbsp;: l'organisme pourra demander les explications et les perspectives correspondantes&nbsp;; les liasses et les relevés seront fournis sur demande."
+    elif croiss is not None and float(croiss) >= 10 and (mn1 is None or mn0 is None or mn0 >= mn1 - 1):
+        encadre = "Une croissance à deux chiffres qui ne dégrade pas la rentabilité&nbsp;: le profil correspond au critère attendu d'un financement locatif d'équipement productif, l'équipement refinancé venant renforcer l'outil de production de la société."
+    elif croiss is not None and float(croiss) >= 10 and mn1 is not None and mn0 is not None:
+        encadre = f"Une croissance à deux chiffres ({_fmt_signe_pct(croiss)})&nbsp;; la marge nette recule toutefois de {('%.1f' % (mn1 - mn0)).replace('.', ',')} points, à {_fmt_pct(mn0).replace(chr(160), ' ').strip()}&nbsp;: les explications seront fournies sur demande."
+    else:
+        encadre = f"Un chiffre d'affaires de {_fmt_eur(dernier.get('ca'))} et un résultat net de {_fmt_eur(dernier.get('resultat_net'))} sur le dernier exercice&nbsp;: le profil correspond à celui attendu d'un financement locatif d'équipement productif."
+    annees = [f["annee"] for f in fins]
+    liste = f"exercices {annees[-1]} à {annees[0]}" if len(annees) > 1 else f"exercice {annees[0]}"
+    ligne_ca = ligne("Chiffre d'affaires", lambda f: _fmt_eur(f.get("ca")))
+    ligne_cr = ligne("Croissance du chiffre d'affaires", lambda f: _fmt_signe_pct(f.get("croissance_ca")))
+    ligne_rn = ligne("Résultat net", lambda f: _fmt_eur(f.get("resultat_net")))
+    return f"""
+    <h2>3. Lecture financière</h2>
+    <p class="sous-chap">Trois exercices publiés, une trajectoire lisible</p>
+    <table>
+      <tr><th style="width:34%">Indicateur</th>{tetes}</tr>
+      {ligne_ca}
+      {ligne_cr}
+      {ligne_rn}
+      {ligne_mn}
+    </table>
+    <p>{analyse}</p>
+    <div class="encadre">{encadre}</div>
+    <p>Les liasses fiscales complètes des {liste} sont disponibles sur demande, ainsi que le détail de l'endettement existant et des cautions éventuelles.</p>
+    <p class="sources">Sources&nbsp;: comptes publiés de la société ({liste}).</p>
+"""
+
+
+def _page3_body(code, date_fr, validite, ctx) -> str:
+    """Chapitres 4 (projet d'équipement) et 5 (grille de refinancement).
+    ctx : equipement, fournisseur, devis_principal, devis_option, livraison,
+    montant, montant_sans_option, durees, apports."""
+    m = ctx["montant"]
+    grille = _table_grille(m, ctx["durees"], ctx["apports"], vide=False)
+    sans_option = ""
+    if ctx["montant_sans_option"]:
+        sans_option = f" Sur la base du seul périmètre principal, le montant s'établit à {_fmt_eur(ctx['montant_sans_option'])} HT&nbsp;; le montant définitif sera ajusté au périmètre confirmé."
+    grille_intro = f"<p><strong>Montant global à financer&nbsp;: {_fmt_eur(m)} HT</strong>, hors transport et travaux connexes non inclus.{sans_option} La sécurisation du paiement fournisseur est prévue (acompte contre caution d'acompte, solde au chargement contre lettre de crédit irrévocable confirmée). Le contrat prendra la forme d'une location de l'équipement au profit de la société, avec cession de l'équipement à la société au terme du contrat, à sa valeur vénale.</p>"
+    durees_annees = " ou ".join(f"{d // 12}\u00a0ans" for d in ctx["durees"]) if ctx["durees"] else ""
+    return f"""
+    <h2>4. Le projet d'équipement</h2>
+    <p class="sous-chap">Un équipement neuf, apporté par un distributeur partenaire</p>
+    <table>
+      <tr><th style="width:26%">Équipement</th><td>{ctx['equipement']}</td></tr>
+      <tr><th>Fournisseur</th><td>{ctx['fournisseur']}</td></tr>
+      <tr><th>Devis principal</th><td>{ctx['devis_principal']}</td></tr>
+      <tr><th>Option</th><td>{ctx['devis_option']}</td></tr>
+      <tr><th>Livraison / mise en service</th><td>{ctx['livraison']}</td></tr>
+    </table>
+    <div class="encadre">Un actif neuf, adossé à un besoin industriel identifié. Équipement neuf acquis sur facture du fournisseur, puis loué à la société&nbsp;: le montage de location/cession avec cession finale à la valeur vénale au terme s'applique directement.</div>
+    <p class="sources">Sources&nbsp;: devis fournisseurs cités ci-dessus, dossier {_esc(code)} (CRM de {EMETTEUR['nom']}).</p>
+
+    <h2>5. La grille de refinancement</h2>
+    <p class="sous-chap">Un montant, des durées ({durees_annees}), une grille de taux à compléter par l'organisme</p>
+    {grille_intro}
+    <p>L'organisme est invité à renseigner le taux nominal annuel qu'il accorde, pour chaque combinaison d'apport en comptant et de durée listée ci-dessous. La grille complétée, datée et signée vaut proposition ferme, garantie {validite} jours.</p>
+    {grille}
+    <p>Merci de préciser, le cas échéant, les frais de dossier, un taux indexé (nominal et indice de référence) et les conditions d'assurance de l'équipement. La grille figure également en page de réponse, destinée à être complétée et signée.</p>
+    <p class="sources">Sources&nbsp;: devis cités au chapitre 4.</p>
+"""
+
+
+def _page4_body(code, societe, fins, ctx) -> str:
+    """Chapitres 6 (pièces disponibles) et 7 (synthèse). ctx : date_fr, delai,
+    montant, durees, apports."""
+    date_fr = ctx["date_fr"]
+    delai = ctx["delai"]
+    montant, durees, apports = ctx["montant"], ctx["durees"], ctx["apports"]
+    if fins:
+        annees = [f["annee"] for f in fins]
+        liste_ex = f"exercices {annees[-1]} à {annees[0]}" if len(annees) > 1 else f"exercice {annees[0]}"
+        liasses = f"liasses fiscales des {liste_ex}"
+    else:
+        liasses = "liasses fiscales des derniers exercices"
+    durees_annees = " ou ".join(f"{d // 12}\u00a0ans" for d in durees)
+    apports_txt = "avec ou sans apport en comptant" if len(apports) > 1 else ("avec apport en comptant" if apports and apports[0] > 0 else "sans apport en comptant")
+    dernier = fins[0] if fins else None
+    perf = ""
+    if dernier and dernier.get("croissance_ca") is not None:
+        try:
+            if float(dernier["croissance_ca"]) >= 10:
+                perf = f"en croissance de plus de {int(float(dernier['croissance_ca']))} % sur son dernier exercice{' et profitable' if (dernier.get('resultat_net') or 0) > 0 else ''}, "
+            elif (dernier.get("resultat_net") or 0) > 0:
+                perf = f"profitable sur son dernier exercice (résultat net de {_fmt_eur(dernier['resultat_net'])}), "
+        except (TypeError, ValueError):
+            perf = ""
+    elif dernier and (dernier.get("resultat_net") or 0) > 0:
+        perf = f"profitable sur son dernier exercice (résultat net de {_fmt_eur(dernier['resultat_net'])}), "
+    return f"""
+    <h2>6. Cadre de l'opération et pièces disponibles</h2>
+    <p class="sous-chap">Un dossier complet, disponible immédiatement sur demande</p>
+    <p>Les pièces suivantes sont prêtes à être transmises&nbsp;: extrait Kbis de moins de 3 mois, {liasses}, devis détaillés des équipements, mandat de recherche de financement signé par la société, plaquette de présentation de SylvaGreen.</p>
+    <p>Les points suivants seront complétés au fil de la qualification, sans retarder la réponse à la demande&nbsp;: plan de financement définitif, date de mise en service, cautions et garanties éventuellement demandées.</p>
+    <p class="sources">Sources&nbsp;: dossier {_esc(code)}, CRM de {EMETTEUR['nom']}.</p>
+
+    <h2>7. Synthèse</h2>
+    <p class="sous-chap">Un engagement réciproque, une réponse attendue sous {delai} jours</p>
+    <p>La société {_esc(societe)}, {perf}recherche le financement en location/cession de l'équipement décrit au chapitre 4 pour {_fmt_eur(montant)} HT, sur une durée de {durees_annees}, {apports_txt}. La société s'engage à conduire l'opération avec l'organisme dont la proposition sera retenue.</p>
+    <p>Nous demandons à votre organisme&nbsp;: une réponse par oui ou par non, au moyen de la page ci-après&nbsp;; en cas d'accord, les taux nominaux annuels garantis selon la grille du chapitre 5, les éventuels frais de dossier, et leur durée de validité. Un retour sous {delai} jours permettrait de présenter le montage à la société dans les meilleures conditions. Les propositions des organismes non retenus demeureront strictement confidentielles.</p>
+    <p class="aise">{EMETTEUR['nom']} est l'interlocuteur unique du dossier et transmet toutes les pièces complémentaires sur simple demande&nbsp;: {EMETTEUR['representant']}, {EMETTEUR['tel']}, {EMETTEUR['email']}.</p>
+    <p class="mention">Document d'information établi par {EMETTEUR['nom']} à partir de données publiques et des devis fournisseurs cités. Il ne constitue ni une offre de crédit, ni un conseil en investissement. Les chiffres de la société proviennent de ses comptes publiés&nbsp;; les montants du projet, des devis fournisseurs cités.</p>
+"""
+
+
+def _page5_body(code, nom_org, validite, ctx) -> str:
+    """Chapitre 8 : page de réponse de l'organisme (à compléter, dater, signer)."""
+    grille = _table_grille(ctx["montant"], ctx["durees"], ctx["apports"], vide=True)
+    return f"""
+    <h2>8. Réponse de l'organisme de financement</h2>
+    <p class="sous-chap">Page à compléter, dater et signer par l'organisme sollicité, en réponse à la demande de refinancement du dossier {_esc(code)}</p>
+    <table>
+      <tr><th style="width:30%">Organisme</th><td>{_esc(nom_org)}</td></tr>
+      <tr><th>Établissement / agence</th><td class="a-remplir">&nbsp;</td></tr>
+      <tr><th>Correspondant</th><td class="a-remplir">&nbsp;</td></tr>
+      <tr><th>Date de la réponse</th><td class="a-remplir">&nbsp;</td></tr>
+    </table>
+    <p style="margin-top:2.5mm"><strong>Réponse (cocher la case applicable)</strong></p>
+    <p class="a-remplir"><span class="case"></span>&nbsp;&nbsp;<strong>La demande est acceptée.</strong> L'organisme propose et garantit les taux nominaux annuels ci-dessous pour le dossier {_esc(code)}, pendant une durée de {validite} jours à compter de la date de la réponse. Cette proposition vaut engagement de financer l'affaire aux conditions indiquées, sous réserve des vérifications d'usage.</p>
+    {grille}
+    <table>
+      <tr><th style="width:30%">Frais de dossier</th><td class="a-remplir">&nbsp;</td></tr>
+      <tr><th>Taux indexé (nominal et indice)</th><td class="a-remplir">&nbsp;</td></tr>
+      <tr><th>Conditions d'assurance demandées</th><td class="a-remplir">&nbsp;</td></tr>
+    </table>
+    <p class="a-remplir"><span class="case"></span>&nbsp;&nbsp;<strong>La demande n'est pas acceptée.</strong> motif principal&nbsp;: …………………………………………………………………………</p>
+    <p style="margin-top:4.5mm">Fait à …………………………, le …………………………</p>
+    <p style="margin-top:3mm">Lu et approuvé, bon pour accord sur les taux indiqués ci-dessus,</p>
+    <p>Nom et qualité du représentant habilité&nbsp;: ………………………………………………</p>
+    <p>Signature et cachet de l'organisme&nbsp;:</p>
+    <p style="height:22mm; border:1px solid #b9c7b2; margin-top:2.5mm; border-radius:2px;">&nbsp;</p>
+    <p class="mention" style="margin-top:4mm">Les propositions des organismes non retenus demeurent strictement confidentielles et ne donnent lieu à aucune exploitation. La présente page, signée, sera versée au dossier {_esc(code)} tenu par {EMETTEUR['nom']}.</p>
+"""
+
+
+@agents.tool
+async def generer_demande_refinancement(
+    dossier: str,
+    organismes: list,
+    montant_global_ht: float,
+    montant_sans_option_ht: float | None = None,
+    equipement: str = "",
+    fournisseur: str = "",
+    devis_principal: str = "",
+    devis_option: str = "",
+    livraison: str = "",
+    delai_jours: int = 15,
+    validite_jours: int = 60,
+    durees: list | None = None,
+    apports: list | None = None,
+) -> str:
+    """GÉNÈRE la demande de refinancement officielle du dossier (étape 3) : un
+    PDF charte SylvaGreen (couverture + 5 pages, page 5 à compléter, dater et
+    SIGNER par l'organisme) qui contractualise la demande — la banque répond
+    par oui ou par non et garantit ses taux selon la grille. UN exemplaire
+    NOMINATIF par organisme, posé sur l'AFFAIRE sous DEM-{CODE}_{ORG}_{date}.pdf
+    (+ une note par organisme) ; le champ « Organismes sollicités » de l'affaire
+    est mis à jour et vérifié en relecture.
+    La banque AVANT le devis client : cet outil est appelé avant tout chiffrage.
+    Produit UNIQUE de ce flux : la LOCATION/CESSION (matériel neuf acheté pour
+    le client, loué au client, cession au client à sa valeur vénale au terme).
+    - dossier : nom OU id OU code (ex. « LES-001 ») de l'affaire.
+    - organismes : codes du panel bancaire, ex. ["CAL"] ou ["CAL","BNP","SGEF"].
+    - montant_global_ht : montant global à financer, OBLIGATOIRE (le lire dans la
+      synthèse du dossier, jamais l'inventer) ; montant_sans_option_ht : montant
+      du périmètre principal seul, si distinct.
+    - equipement / fournisseur / devis_principal / devis_option / livraison :
+      descriptions FACTUELLES (lues dans les devis ou la synthèse) ; laissées
+      vides, elles sont lues dans l'affaire CRM, sinon « — ».
+    - delai_jours (15 par défaut) : retour souhaité ; validite_jours (60 par
+      défaut) : durée de garantie des taux proposés.
+    - durees (défaut [60,72,84] mois) et apports (défaut [0,10,20,30] %).
+    JAMAIS remplacer un exemplaire existant (erreur explicite si le fichier
+    existe déjà). L'agent ne choisit JAMAIS l'organisme retenu : seule la
+    réponse signée d'Olivier fait foi (champ Financeur_organismes).
+    Renvoie JSON {statut, dossier, deal_id, code, fichiers[], organismes[],
+    warnings[], message}."""
+    warnings: list = []
+    # --- validation des entrées ---
+    try:
+        montant = round(float(montant_global_ht), 2)
+    except (TypeError, ValueError):
+        return json.dumps({"erreur": "montant_global_ht invalide : donner le montant global à financer en euros HT (le lire dans la synthèse du dossier)."}, ensure_ascii=False)
+    if montant <= 0:
+        return json.dumps({"erreur": "montant_global_ht doit être positif."}, ensure_ascii=False)
+    if isinstance(organismes, str):
+        organismes = [organismes]
+    codes_org = [str(c).strip().upper() for c in (organismes or []) if str(c).strip()]
+    if not codes_org:
+        return json.dumps({"erreur": "organismes manquants : donner les codes du panel bancaire (ex. [\"CAL\"])."}, ensure_ascii=False)
+    try:
+        liste_durees = sorted({int(d) for d in (durees or [60, 72, 84]) if int(d) > 0})
+        liste_apports = sorted({int(a) for a in (apports or [0, 10, 20, 30]) if 0 <= int(a) < 100})
+    except (TypeError, ValueError):
+        return json.dumps({"erreur": "durees/apports invalides : listes d'entiers."}, ensure_ascii=False)
+    if not liste_durees or not liste_apports:
+        return json.dumps({"erreur": "durees/apports vides."}, ensure_ascii=False)
+    validite = int(validite_jours or 60)
+    delai = int(delai_jours or 15)
+    date_fr = datetime.now().strftime("%d/%m/%Y")
+    date_iso = datetime.now().strftime("%Y%m%d")
+
+    async with httpx.AsyncClient(timeout=120) as chttp:
+        # --- 1. résolution de l'affaire et lectures CRM ---
+        td = await _trouver_deal(chttp, dossier)
+        if td["verdict"] == "plusieurs":
+            return json.dumps({
+                "erreur": "Plusieurs affaires correspondent : préciser l'id ou le code du dossier.",
+                "candidats": [{"id": d.get("id"), "nom": d.get("Deal_Name")} for d in td["deals"]],
+            }, ensure_ascii=False)
+        if td["verdict"] != "unique":
+            return json.dumps({"erreur": f"Dossier introuvable : « {dossier} ». Donner le code (ex. LES-001) ou l'id."}, ensure_ascii=False)
+        deal = td["deals"][0]
+        deal_id = str(deal["id"])
+        r = await chttp.get(
+            f"{ZOHO_CRM}/Deals",
+            params={"ids": deal_id,
+                    "fields": "id,Deal_Name,Account_Name,Equipement_nature_et_marque,Fournisseur_quipement,Prix_d_acquisition_HT," + CHAMP_ORGANISMES},
+            headers=await _h(),
+        )
+        if r.status_code != 200 or not r.json().get("data"):
+            return json.dumps({"erreur": f"lecture de l'affaire refusée : HTTP {r.status_code}."}, ensure_ascii=False)
+        d0 = r.json()["data"][0]
+        deal_nom = d0.get("Deal_Name") or ""
+        code = _code_du_deal(deal_nom) or _code_du_deal(dossier)
+        if not code:
+            return json.dumps({"erreur": "Le dossier n'a pas de code {CODE}-{NNN} (convention « 1 devis = 1 affaire ») : passer par l'étape 1."}, ensure_ascii=False)
+
+        compte_obj = d0.get("Account_Name") or {}
+        compte_id = str((compte_obj.get("id") if isinstance(compte_obj, dict) else compte_obj) or "")
+        compte_nom = (compte_obj.get("name") if isinstance(compte_obj, dict) else "") or ""
+        compte: dict = {}
+        if compte_id:
+            rc = await chttp.get(
+                f"{ZOHO_CRM}/Accounts",
+                params={"ids": compte_id, "fields": "Account_Name,SIRET,Billing_Street,Billing_City,Billing_Code,Billing_State"},
+                headers=await _h(),
+            )
+            if rc.status_code == 200 and rc.json().get("data"):
+                compte = rc.json()["data"][0]
+        societe = (compte.get("Account_Name") or compte_nom or deal_nom).strip()
+        siren = _siren_de(societe) or (compte.get("SIRET") or "")[:9]
+
+        # --- 2. fiche registre national (identité + finances) ---
+        fiche = None
+        if len(siren or "") == 9:
+            try:
+                fiche = await _fiche_pappers(chttp, siren)
+            except RuntimeError as e:
+                warnings.append(str(e))
+        else:
+            warnings.append("SIREN absent du compte : fiche d'identité incomplète dans le document ; passer preparer_client d'abord.")
+        fins = (fiche or {}).get("finances") or []
+        identite = (fiche or {}).get("identite") or {}
+        dirigeants = (fiche or {}).get("dirigeants") or []
+
+        siege_pap = (fiche or {}).get("siege") or {}
+        rue = ((compte.get("Billing_Street") or "") or (siege_pap.get("adresse") or "")).strip()
+        cp = ((compte.get("Billing_Code") or "") or (siege_pap.get("code_postal") or "")).strip()
+        ville = ((compte.get("Billing_City") or "") or (siege_pap.get("ville") or "")).strip()
+        region = (compte.get("Billing_State") or "").strip()
+        cp_ville = " ".join(x for x in (cp, ville) if x)
+        siege_mor = ", ".join(x for x in (rue, cp_ville, region) if x)
+        ident = {
+            "forme": _esc(identite.get("forme_juridique") or "—"),
+            "siren": _siren_affiche(siren),
+            "siege": _esc(siege_mor or "—"),
+            "cree_le": _date_fr(identite.get("date_creation") or "—"),
+            "capital": _fmt_eur(identite.get("capital")),
+            "naf": _esc(identite.get("naf") or "—"),
+            "effectif": _esc(str(identite["effectif"])) if identite.get("effectif") is not None else "—",
+            "dirigeants": _esc(" ; ".join(f"{dg['nom']} ({dg['qualite']})" for dg in dirigeants if dg.get("nom"))) if dirigeants else "non publiés au registre à ce jour, à obtenir de la société",
+        }
+
+        # --- 3. panel bancaire et organismes demandés ---
+        try:
+            panel = await _organismes_panel(chttp)
+        except RuntimeError as e:
+            return json.dumps({"erreur": f"panel bancaire illisible : {e}"}, ensure_ascii=False)
+        inconnus = [c for c in codes_org if c not in panel]
+        if inconnus:
+            return json.dumps({
+                "erreur": f"Code(s) organisme inconnu(s) : {', '.join(inconnus)}.",
+                "codes_disponibles": {c: v["nom"] for c, v in sorted(panel.items())},
+            }, ensure_ascii=False)
+
+        # --- 4. contexte ch. 4 (factuel uniquement) ---
+        fourn_obj = d0.get("Fournisseur_quipement")
+        fournisseur_txt = (fournisseur or "").strip() or (fourn_obj.get("name") if isinstance(fourn_obj, dict) else "") or ""
+        equip_txt = (equipement or "").strip() or (d0.get("Equipement_nature_et_marque") or "")
+        devis_cites = bool((devis_principal or "").strip() or (devis_option or "").strip())
+        ctx = {
+            "date_fr": date_fr,
+            "delai": delai,
+            "montant": montant,
+            "montant_sans_option": montant_sans_option_ht,
+            "durees": liste_durees,
+            "apports": liste_apports,
+            "equipement": _esc(equip_txt) or "—",
+            "fournisseur": _esc(fournisseur_txt) or "—",
+            "devis_principal": _esc((devis_principal or "").strip()) or "— (devis joints au dossier)",
+            "devis_option": _esc((devis_option or "").strip()) or "—",
+            "livraison": _esc((livraison or "").strip()) or "à préciser avec le client",
+            "devis_cites": devis_cites,
+        }
+
+        # --- 5. génération d'un exemplaire NOMINATIF par organisme ---
+        template = _fichier_repo("template_demande.html")
+        logo_b64 = "".join(_fichier_repo("logo_base64.txt").split())
+        existants = {pj.get("File_Name") for pj in await _pieces_jointes(chttp, "Deals", deal_id)}
+        fichiers, orgs_resultat = [], []
+        for cd in codes_org:
+            fiche_org = panel[cd]
+            nom_org = fiche_org["nom"] or cd
+            couv = [f"<strong>{_esc(nom_org).upper()}</strong><br/>", "organisme de financement<br/>"]
+            if fiche_org.get("ville"):
+                couv.append(f"{_esc(fiche_org['ville'])}<br/>")
+            couv.append('<span class="role">«&nbsp;le Destinataire&nbsp;»</span>')
+            communs = {
+                "LOGO": logo_b64,
+                "DATE_FR": date_fr,
+                "DOC_ORG": _esc(nom_org),
+                "CODE": _esc(code),
+                "DOSSIER_LIB": _esc(societe),
+                "EM_NOM": EMETTEUR["nom"],
+                "EM_NOM_MAJ": EMETTEUR["nom_maj"],
+                "EM_REPRESENTANT": f"{EMETTEUR['representant']}, {EMETTEUR['fonction']}",
+                "EM_ADRESSE": EMETTEUR["adresse"],
+                "EM_TEL": EMETTEUR["tel"],
+                "EM_EMAIL": EMETTEUR["email"],
+                "EM_SIRET": EMETTEUR["siret"],
+                "COUV_ORG": "".join(couv),
+            }
+            pages = [
+                _page1_body(code, societe, nom_org, date_fr, validite, fins, devis_cites, ident),
+                _page2_body(fins),
+                _page3_body(code, date_fr, validite, ctx),
+                _page4_body(code, societe, fins, ctx),
+                _page5_body(code, nom_org, validite, ctx),
+            ]
+            html_final = template
+            for k, v in communs.items():
+                html_final = html_final.replace("{{" + k + "}}", v)
+            for i, body in enumerate(pages, 1):
+                html_final = html_final.replace("{{PAGE%d_BODY}}" % i, body)
+            if "{{" in html_final:
+                warnings.append("patron incomplètement rempli : au moins un jeton est resté en l'état")
+
+            nom_pdf = f"DEM-{code}_{cd}_{date_iso}.pdf"
+            if nom_pdf in existants:
+                return json.dumps({
+                    "erreur": f"Un exemplaire pour {cd} existe déjà ({nom_pdf}) : JAMAIS remplacé. Si Olivier veut le refaire, il supprime ou archive d'abord la pièce.",
+                    "statut": "refusé",
+                    "dossier": deal_nom,
+                }, ensure_ascii=False)
+            try:
+                pdf = _pdf_depuis_html(html_final)
+            except Exception as e:
+                return json.dumps({"erreur": f"échec de génération du PDF ({type(e).__name__}) : {str(e)[:200]}"}, ensure_ascii=False)
+            up = await _televerser_piece(chttp, "Deals", deal_id, nom_pdf, pdf)
+            if up.get("erreur"):
+                return json.dumps({"erreur": f"exemplaire {cd} refusé : {up['erreur']}"}, ensure_ascii=False)
+            note_txt = (
+                f"[Demande de refinancement générée le {date_fr}]\n"
+                f"Organisme : {nom_org} ({cd})\n"
+                f"Montant global à financer : {_fmt_eur(montant).replace(chr(160), ' ')} HT\n"
+                f"Durées consultées : {', '.join(str(x) for x in liste_durees)} mois ; apports : {', '.join(str(x) for x in liste_apports)} %\n"
+                f"Réponse attendue : grille de taux à compléter et signer (page 5), garantie {validite} jours ; retour souhaité sous {delai} jours.\n"
+                f"Exemplaire : {nom_pdf}"
+            )
+            note = await _ajouter_note(chttp, "Deals", deal_id, f"Demande {cd}", note_txt)
+            if note.get("erreur"):
+                warnings.append(f"note {cd} refusée : {note['erreur']}")
+            existants.add(nom_pdf)
+            fichiers.append({"organisme": cd, "fichier": nom_pdf, "attachment_id": up.get("id"), "note_id": note.get("id")})
+            orgs_resultat.append({"code": cd, "organisme": nom_org})
+
+        # --- 6. champ « Organismes sollicités » (multiselect, fusion + vérif) ---
+        picklist = await _picklist(chttp, "Deals", CHAMP_ORGANISMES, DEALS_REFI_LAYOUT_ID)
+        labels = [lib for _, lib in picklist]
+        manquants, labels_ok = [], []
+        for cd in codes_org:
+            lab = _label_organisme(panel[cd]["nom"], labels)
+            if lab:
+                labels_ok.append(lab)
+            else:
+                manquants.append(f"{cd} ({panel[cd]['nom']})")
+        champ_ok = False
+        if labels_ok:
+            champ_ok = await _maj_organismes_sollicites(chttp, deal_id, labels_ok)
+            if not champ_ok:
+                warnings.append("champ Organismes_sollicit_s : écriture non confirmée en relecture (vérifier les libellés picklist avec Olivier)")
+        for lab in manquants:
+            warnings.append(f"libellé picklist introuvable pour {lab} : champ non mis à jour pour cet organisme")
+
+        return json.dumps({
+            "statut": "cree",
+            "dossier": deal_nom,
+            "deal_id": deal_id,
+            "code": code,
+            "compte": societe,
+            "fichiers": fichiers,
+            "organismes": orgs_resultat,
+            "montant_global_ht": montant,
+            "durees_mois": liste_durees,
+            "apports_pct": liste_apports,
+            "champ_organismes_sollicites": champ_ok,
+            "warnings": warnings or None,
+            "message": ("Demande(s) de refinancement générée(s) et jointe(s) à l'affaire, une par organisme. "
+                        "Prochaine étape : Olivier envoie chaque exemplaire nominatif à son organisme ; "
+                        "la réponse signée revient dans l'affaire (convention REP-{CODE}_{ORG}_{date}). "
+                        "L'agent ne choisit jamais l'organisme retenu."),
         }, ensure_ascii=False)
