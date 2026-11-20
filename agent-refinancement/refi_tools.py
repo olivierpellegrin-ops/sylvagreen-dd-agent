@@ -1,4 +1,4 @@
-"""Outils Zoho CRM de l'agent refinancement (crédit-bail) — SylvaGreen Capital.
+"""Outils Zoho CRM de l'agent refinancement (crédit-bail) · SylvaGreen Capital.
 
 Progression : étapes 1-2 outillées ; convention actée « 1 devis = 1 affaire » :
 - enregistrer_demande : crée le DOSSIER (Affaire du Pipeline « Refinancement »,
@@ -11,7 +11,7 @@ Progression : étapes 1-2 outillées ; convention actée « 1 devis = 1 affaire 
   sur un compte client ou un dossier du CRM (Zoho ; PDF via pypdf) ; filtre
   non_codes pour ne voir que les devis fournisseur NON traités.
 - marquer_devis_traite : renomme le devis brut avec le code du dossier
-  ({CODE}-{NNN}_{date}_{nom original}) et le recopie sur l'affaire — un devis
+  ({CODE}-{NNN}_{date}_{nom original}) et le recopie sur l'affaire · un devis
   codé n'est jamais retraité.
 - enregistrer_synthese : Note Zoho + fichier SYN-{CODE}_{date}.txt sur l'affaire.
 - lire_synthese : relit les synthèses (notes + fichiers SYN-) d'un dossier.
@@ -28,7 +28,7 @@ Les devis fournisseur bruts sont déposés par Olivier sur le COMPTE client
 (parking) sous un nom NON codé ; le préfixe SYN- est réservé aux synthèses.
 Le module Devis (Quotes) porte les VERSIONS de devis ; il exige des lignes produit
 (sous-formulaire Quoted_Items obligatoire) : il est créé au chiffrage, quand
-l'équipement réel est connu — jamais à la prise de demande.
+l'équipement réel est connu · jamais à la prise de demande.
 """
 
 from __future__ import annotations
@@ -409,7 +409,7 @@ async def _notes_du(chttp, module: str, record_id: str) -> list:
 
 
 # ---------------------------------------------------------------------------
-# Étape 1 — enregistrer la demande (dossier dans le Pipeline Refinancement)
+# Étape 1 · enregistrer la demande (dossier dans le Pipeline Refinancement)
 # ---------------------------------------------------------------------------
 @agents.tool
 async def enregistrer_demande(
@@ -554,7 +554,7 @@ async def enregistrer_demande(
 
         # --- 5. création de l'affaire ---
         pht, pttc = _montant_float(prix_ht), _montant_float(prix_ttc)
-        deal_name = f"{code_final} — {(equipement or "")[:60] or compte_nom}".strip()[:120]
+        deal_name = f"{code_final} · {(equipement or "")[:60] or compte_nom}".strip()[:120]
         champs: dict = {
             "Layout": {"id": DEALS_REFI_LAYOUT_ID},
             "Deal_Name": deal_name,
@@ -565,7 +565,7 @@ async def enregistrer_demande(
             "Equipement_nature_et_marque": equipement,
             "Description": _note("", f"demande enregistrée (canal : {source}"
                                      + (f" ; apportée par {distributeur}" if distributeur else "")
-                                     + ")" + (f" — {note}" if note else "")),
+                                     + ")" + (f" · {note}" if note else "")),
         }
         if type_api:
             champs["Type_de_produit"] = type_api
@@ -607,7 +607,7 @@ async def enregistrer_demande(
 
 
 # ---------------------------------------------------------------------------
-# Étape 2 — fiche client : création / vérification (bancabilité)
+# Étape 2 · fiche client : création / vérification (bancabilité)
 # ---------------------------------------------------------------------------
 @agents.tool
 async def preparer_client(
@@ -628,7 +628,7 @@ async def preparer_client(
     - client : nom de société OU SIREN. - siren : SIREN si déjà connu (9 chiffres,
       zéros de tête inclus, transmis TEL QUEL).
     - scoring : si True, ajoute le scoring Pappers (financier + non financier :
-      note A-E, score /20, probabilité de défaillance à 1 an) — COÛTE ~30 CREDITS
+      note A-E, score /20, probabilité de défaillance à 1 an) · COÛTE ~30 CREDITS
       Pappers : ne le mettre que si Olivier le demande explicitement.
     Aucun doublon : le dédoublonnage se fait par SIREN (champ SIRET du compte).
     Renvoie JSON {compte_id, statut_fiche: cree|enrichi|existant, siren, identite,
@@ -813,7 +813,7 @@ async def preparer_client(
 
 
 # ---------------------------------------------------------------------------
-# Lecture CRM — pièces jointes (synthèses, devis) d'un compte ou d'un dossier
+# Lecture CRM · pièces jointes (synthèses, devis) d'un compte ou d'un dossier
 # ---------------------------------------------------------------------------
 @agents.tool
 async def lire_piece_jointe(
@@ -904,7 +904,7 @@ async def lire_piece_jointe(
 
 
 # ---------------------------------------------------------------------------
-# Étape 1 (suite) — coder le devis traité, synthèse du dossier, relecture
+# Étape 1 (suite) · coder le devis traité, synthèse du dossier, relecture
 # ---------------------------------------------------------------------------
 @agents.tool
 async def marquer_devis_traite(
@@ -914,8 +914,8 @@ async def marquer_devis_traite(
 ) -> str:
     """MARQUE un devis fournisseur comme TRAITÉ (à enchaîner juste après
     enregistrer_demande) : renomme le devis brut déposé sur le COMPTE du client
-    avec le code du dossier — nouveau nom {CODE}-{NNN}_{AAAAMMJJ}_{nom original}
-    (ex. LES-001_20261120_devis-carbon-stop.pdf) — puis RECOPIE le devis sous
+    avec le code du dossier · nouveau nom {CODE}-{NNN}_{AAAAMMJJ}_{nom original}
+    (ex. LES-001_20261120_devis-carbon-stop.pdf) · puis RECOPIE le devis sous
     ce nom codé sur l'affaire du dossier. C'est ce renommage qui garantit qu'un
     devis n'est JAMAIS traité deux fois (l'agent ne traite que les fichiers
     non codés du compte).
@@ -1020,8 +1020,8 @@ async def marquer_devis_traite(
 @agents.tool
 async def enregistrer_synthese(dossier: str, texte: str, client: str = "") -> str:
     """ENREGISTRE la synthèse du dossier (dernier geste de l'étape 1) : pose sur
-    l'AFFAIRE un double enregistrement lisible — une Note Zoho (titre
-    « Synthèse {code} ») ET un fichier texte SYN-{CODE}_{AAAAMMJJ}.txt — pour que
+    l'AFFAIRE un double enregistrement lisible · une Note Zoho (titre
+    « Synthèse {code} ») ET un fichier texte SYN-{CODE}_{AAAAMMJJ}.txt · pour que
     la lecture du devis reste consultable sans rouvrir le PDF. Convention : le
     préfixe SYN- est RÉSERVÉ aux synthèses, jamais traitées comme des devis.
     - dossier : nom OU id (17 chiffres) OU code (ex. « LES-001 ») de l'affaire.
@@ -1031,7 +1031,7 @@ async def enregistrer_synthese(dossier: str, texte: str, client: str = "") -> st
     - client : nom OU SIREN du compte bénéficiaire (recommandé juste après la
       création de l'affaire).
     - texte : synthèse factuelle de la lecture du devis (équipement, prix,
-      distributeur, conditions, version) — UNIQUEMENT ce qui a été lu dans la
+      distributeur, conditions, version) · UNIQUEMENT ce qui a été lu dans la
       pièce, rien d'inventé. Une ligne d'en-tête [SYN-...] est ajoutée
       automatiquement. Un texte trop long est refusé.
     Renvoie JSON {statut: cree, dossier, deal_id, code, note_id, fichier,
@@ -1063,7 +1063,7 @@ async def enregistrer_synthese(dossier: str, texte: str, client: str = "") -> st
         deal = td["deals"][0]
         deal_id, deal_nom = str(deal.get("id")), deal.get("Deal_Name")
         code = _code_du_deal(deal_nom)
-        entete = f"[SYN-{code or 'dossier'} — synthèse agent refinancement, {datetime.now():%d/%m/%Y}]\n"
+        entete = f"[SYN-{code or 'dossier'} · synthèse agent refinancement, {datetime.now():%d/%m/%Y}]\n"
         note = await _ajouter_note(chttp, "Deals", deal_id, f"Synthèse {code}" if code else "Synthèse", entete + texte)
         if note.get("erreur"):
             return json.dumps({"erreur": note["erreur"]}, ensure_ascii=False)
@@ -1179,7 +1179,7 @@ async def lire_synthese(dossier: str = "", client: str = "") -> str:
         }, ensure_ascii=False)
 
 # ---------------------------------------------------------------------------
-# Étape 3 — demande de refinancement officielle (nominative par organisme)
+# Étape 3 · demande de refinancement officielle (nominative par organisme)
 # ---------------------------------------------------------------------------
 from html import escape as _esc
 
@@ -1191,7 +1191,7 @@ EMETTEUR = {
     "nom_maj": "SYLVAGREEN CONSEILS",
     "representant": "M. Olivier PELLEGRIN",
     "fonction": "gérant",
-    "adresse": "14, Le Sirieix\u00a0— 19220 Bassignac-le-Haut",
+    "adresse": "14, Le Sirieix\u00a0· 19220 Bassignac-le-Haut",
     "tel": "06\u00a017\u00a079\u00a039\u00a008",
     "email": "olivier.pellegrin@sylvagreen.consulting",
     "siret": "450 479 407 00055",
@@ -1212,9 +1212,9 @@ def _fichier_repo(nom: str) -> str:
 
 
 def _fmt_eur(x, prefix: str = "") -> str:
-    """714203 -> « 714 203 € » (séparateur insécable). None -> « — »."""
+    """714203 -> « 714 203 € » (séparateur insécable). None -> « · »."""
     if x is None:
-        return "—"
+        return "·"
     try:
         v = float(x)
     except (TypeError, ValueError):
@@ -1226,7 +1226,7 @@ def _fmt_eur(x, prefix: str = "") -> str:
 def _fmt_signe_pct(x) -> str:
     """20.8 -> « +20,8 % » (le registre exprime la croissance en pourcentage)."""
     if x is None:
-        return "—"
+        return "·"
     try:
         v = float(x)
     except (TypeError, ValueError):
@@ -1237,26 +1237,26 @@ def _fmt_signe_pct(x) -> str:
 
 def _fmt_pct(x) -> str:
     if x is None:
-        return "—"
+        return "·"
     return ("%.1f" % x).replace(".", ",") + "\u00a0%"
 
 
 def _annee_de(exercice) -> str:
     """« 31/12/2025 » ou 2025 -> « 2025 » (dernier groupe de 4 chiffres)."""
     m = re.search(r"(\d{4})", str(exercice or ""))
-    return m.group(1) if m else str(exercice or "—")
+    return m.group(1) if m else str(exercice or "·")
 
 
 def _siren_affiche(siren: str) -> str:
     s = (siren or "").strip()
-    return f"{s[0:3]}\u00a0{s[3:6]}\u00a0{s[6:9]}" if len(s) == 9 else _esc(s or "—")
+    return f"{s[0:3]}\u00a0{s[3:6]}\u00a0{s[6:9]}" if len(s) == 9 else _esc(s or "·")
 
 
 def _date_fr(v) -> str:
     try:
         return datetime.strptime(str(v)[:10], "%Y-%m-%d").strftime("%d/%m/%Y")
     except Exception:
-        return _esc(str(v)) if v else "—"
+        return _esc(str(v)) if v else "·"
 
 
 def _mn_pc(rn, ca) -> float | None:
@@ -1495,7 +1495,7 @@ def _page1_body(code, societe, nom_org, date_fr, validite, fins, devis_cites, id
     <h2>1. Objet de la demande</h2>
     <p class="sous-chap">Une demande officielle de financement en location/cession, adressée nominativement à l'organisme destinataire</p>
     <div class="encadre">La présente demande de refinancement est adressée par {EMETTEUR['nom']}, apporteur de l'opération, au nom de la société {_esc(societe)}, bénéficiaire du financement, à l'attention de {_esc(nom_org)}, organisme destinataire du présent exemplaire, en vue de la location, avec cession finale, de l'équipement décrit au chapitre 4. L'organisme destinataire est invité à y répondre par oui ou par non, au moyen de la page de signature du présent document, en proposant et en garantissant un taux nominal annuel selon la grille du chapitre 5.</div>
-    <p>Le montage retenu est la location/cession&nbsp;: l'organisme acquiert l'équipement neuf auprès du fournisseur, le loue à la société pendant la durée du contrat, puis lui cède l'équipement au terme du contrat, à sa valeur vénale. L'opération est portée par SylvaGreen, spécialiste du financement durable des entreprises de la filière bois.</p>
+    <p>Le montage retenu est la location/cession&nbsp;: l'organisme acquiert l'équipement neuf auprès du fournisseur en finançant l'intégralité de son prix, acomptes de fabrication compris, le loue à la société pendant la durée du contrat, puis lui cède l'équipement au terme, à sa valeur vénale. L'opération est portée par SylvaGreen, spécialiste du financement durable des entreprises de la filière bois.</p>
     <p class="aise">La présente demande contractualise un engagement. Le projet décrit aux chapitres 3 et 4 est d'ores et déjà engagé&nbsp;: la société a signé un mandat de recherche de financement, et l'opération sera conduite avec l'organisme dont la proposition sera retenue. Un exemplaire nominatif du présent document est adressé à chaque organisme consulté&nbsp;; chacun répond sur l'exemplaire reçu, en son nom propre. La réponse, taux compris, engage l'organisme qui la signe, pendant une durée de {validite} jours.</p>
     <p>Ce document est rattaché au dossier {_esc(code)} et reflète la situation de la société à la date du {_esc(date_fr)}. {src_fin}&nbsp;; les données techniques proviennent {src_devis}.</p>
     <p class="sources">Sources&nbsp;: comptes publiés de la société (registre national des entreprises), devis fournisseurs cités, CRM de {EMETTEUR['nom']}.</p>
@@ -1513,7 +1513,7 @@ def _page1_body(code, societe, nom_org, date_fr, validite, fins, devis_cites, id
       <tr><th>Effectif</th><td>{ident['effectif']}</td></tr>
       <tr><th>Dirigeants</th><td>{ident['dirigeants']}</td></tr>
     </table>
-    <p class="sources">Sources&nbsp;: registre national des entreprises, CRM de {EMETTEUR['nom']}. Mention «&nbsp;—&nbsp;»&nbsp;: donnée non disponible au registre à ce jour.</p>
+    <p class="sources">Sources&nbsp;: registre national des entreprises, CRM de {EMETTEUR['nom']}. Mention «&nbsp;·&nbsp;»&nbsp;: donnée non disponible au registre à ce jour.</p>
 """
 
 
@@ -1528,7 +1528,7 @@ def _page2_body(fins) -> str:
 
     def ligne(libelle: str, fmt) -> str:
         cells = "".join(
-            f'<td class="num">{fmt(f) if fmt(f) is not None else "—"}</td>' for f in reversed(fins)
+            f'<td class="num">{fmt(f) if fmt(f) is not None else "·"}</td>' for f in reversed(fins)
         )
         return f'<tr><td style="width:34%">{libelle}</td>{cells}</tr>'
 
@@ -1590,7 +1590,7 @@ def _page3_body(code, date_fr, validite, ctx) -> str:
     sans_option = ""
     if ctx["montant_sans_option"]:
         sans_option = f" Sur la base du seul périmètre principal, le montant s'établit à {_fmt_eur(ctx['montant_sans_option'])} HT&nbsp;; le montant définitif sera ajusté au périmètre confirmé."
-    grille_intro = f"<p><strong>Montant global à financer&nbsp;: {_fmt_eur(m)} HT</strong>, hors transport et travaux connexes non inclus.{sans_option} La sécurisation du paiement fournisseur est prévue (acompte contre caution d'acompte, solde au chargement contre lettre de crédit irrévocable confirmée). Le contrat prendra la forme d'une location de l'équipement au profit de la société, avec cession de l'équipement à la société au terme du contrat, à sa valeur vénale.</p>"
+    grille_intro = f"<p><strong>Montant global à financer&nbsp;: {_fmt_eur(m)} HT</strong>, hors transport et travaux connexes non inclus.{sans_option} <strong>Dans toutes les configurations de la grille, le financement sollicité porte sur l'intégralité du montant indiqué ci-dessus, acomptes de fabrication compris.</strong> L'organisme est prié de décaisser directement le constructeur et le distributeur selon le calendrier de leurs factures, pendant la durée de fabrication de l'équipement&nbsp;; les sommes ainsi débloquées portent loyers d'avancement jusqu'à la mise en service (intérêts intercalaires sur les fonds effectivement versés, échéancier conforme au plan de financement des acomptes remis avec le devis). L'apport en comptant éventuel, quant à lui, n'est pas déduit du montant financé&nbsp;: il est consigné auprès de l'organisme, en garantie de bonne fin, pour la durée du financement, et justifie le taux nominal consenti. La sécurisation du paiement fournisseur est prévue (acompte contre caution d'acompte, solde au chargement contre lettre de crédit irrévocable confirmée). Le contrat prendra la forme d'une location de l'équipement au profit de la société, avec cession de l'équipement à la société au terme du contrat, à sa valeur vénale.</p>"
     durees_annees = " ou ".join(f"{d // 12}\u00a0ans" for d in ctx["durees"]) if ctx["durees"] else ""
     return f"""
     <h2>4. Le projet d'équipement</h2>
@@ -1610,7 +1610,7 @@ def _page3_body(code, date_fr, validite, ctx) -> str:
     {grille_intro}
     <p>L'organisme est invité à renseigner le taux nominal annuel qu'il accorde, pour chaque combinaison d'apport en comptant et de durée listée ci-dessous. La grille complétée, datée et signée vaut proposition ferme, garantie {validite} jours.</p>
     {grille}
-    <p>Merci de préciser, le cas échéant, les frais de dossier, un taux indexé (nominal et indice de référence) et les conditions d'assurance de l'équipement. La grille figure également en page de réponse, destinée à être complétée et signée.</p>
+    <p>Merci de préciser, le cas échéant, les frais de dossier, un taux indexé (nominal et indice de référence), les conditions de l'option de cession au terme (valeur de cession proposée) et les conditions d'assurance de l'équipement. La grille figure également en page de réponse, destinée à être complétée et signée.</p>
     <p class="sources">Sources&nbsp;: devis cités au chapitre 4.</p>
 """
 
@@ -1650,7 +1650,7 @@ def _page4_body(code, societe, fins, ctx) -> str:
 
     <h2>7. Synthèse</h2>
     <p class="sous-chap">Un engagement réciproque, une réponse attendue sous {delai} jours</p>
-    <p>La société {_esc(societe)}, {perf}recherche le financement en location/cession de l'équipement décrit au chapitre 4 pour {_fmt_eur(montant)} HT, sur une durée de {durees_annees}, {apports_txt}. La société s'engage à conduire l'opération avec l'organisme dont la proposition sera retenue.</p>
+    <p>La société {_esc(societe)}, {perf}recherche le financement en location/cession de l'équipement décrit au chapitre 4 pour {_fmt_eur(montant)} HT intégralement financés, sur une durée de {durees_annees}, {apports_txt}, celui-ci étant alors consigné en garantie de bonne fin et non déduit du montant financé. La société s'engage à conduire l'opération avec l'organisme dont la proposition sera retenue.</p>
     <p>Nous demandons à votre organisme&nbsp;: une réponse par oui ou par non, au moyen de la page ci-après&nbsp;; en cas d'accord, les taux nominaux annuels garantis selon la grille du chapitre 5, les éventuels frais de dossier, et leur durée de validité. Un retour sous {delai} jours permettrait de présenter le montage à la société dans les meilleures conditions. Les propositions des organismes non retenus demeureront strictement confidentielles.</p>
     <p class="aise">{EMETTEUR['nom']} est l'interlocuteur unique du dossier et transmet toutes les pièces complémentaires sur simple demande&nbsp;:<br/><strong>{EMETTEUR['representant']}</strong>, {EMETTEUR['tel']}, {EMETTEUR['email']}.</p>
     <p class="mention">Document d'information établi par {EMETTEUR['nom']} à partir de données publiques et des devis fournisseurs cités. Il ne constitue ni une offre de crédit, ni un conseil en investissement. Les chiffres de la société proviennent de ses comptes publiés&nbsp;; les montants du projet, des devis fournisseurs cités.</p>
@@ -1675,6 +1675,7 @@ def _page5_body(code, nom_org, validite, ctx) -> str:
     <table>
       <tr><th style="width:30%">Frais de dossier</th><td class="a-remplir">&nbsp;</td></tr>
       <tr><th>Taux indexé (nominal et indice)</th><td class="a-remplir">&nbsp;</td></tr>
+      <tr><th>Valeur de cession au terme (option)</th><td class="a-remplir">&nbsp;</td></tr>
       <tr><th>Conditions d'assurance demandées</th><td class="a-remplir">&nbsp;</td></tr>
     </table>
     <p class="a-remplir" style="text-align:left"><span class="case"></span>&nbsp;&nbsp;<strong>La demande n'est pas acceptée.</strong> motif principal&nbsp;: <span class="ligne-reponse"></span></p>
@@ -1705,7 +1706,7 @@ async def generer_demande_refinancement(
 ) -> str:
     """GÉNÈRE la demande de refinancement officielle du dossier (étape 3) : un
     PDF charte SylvaGreen (couverture + 5 pages, page 5 à compléter, dater et
-    SIGNER par l'organisme) qui contractualise la demande — la banque répond
+    SIGNER par l'organisme) qui contractualise la demande · la banque répond
     par oui ou par non et garantit ses taux selon la grille. UN exemplaire
     NOMINATIF par organisme, posé sur l'AFFAIRE sous DEM-{CODE}_{ORG}_{date}.pdf
     (+ une note par organisme) ; le champ « Organismes sollicités » de l'affaire
@@ -1720,7 +1721,7 @@ async def generer_demande_refinancement(
       du périmètre principal seul, si distinct.
     - equipement / fournisseur / devis_principal / devis_option / livraison :
       descriptions FACTUELLES (lues dans les devis ou la synthèse) ; laissées
-      vides, elles sont lues dans l'affaire CRM, sinon « — ».
+      vides, elles sont lues dans l'affaire CRM, sinon « · ».
     - delai_jours (15 par défaut) : retour souhaité ; validite_jours (60 par
       défaut) : durée de garantie des taux proposés.
     - durees (défaut [60,72,84] mois) et apports (défaut [0,10,20,30] %).
@@ -1821,13 +1822,13 @@ async def generer_demande_refinancement(
         cp_ville = " ".join(x for x in (cp, ville) if x)
         siege_mor = ", ".join(x for x in (rue, cp_ville, region) if x)
         ident = {
-            "forme": _esc(identite.get("forme_juridique") or "—"),
+            "forme": _esc(identite.get("forme_juridique") or "·"),
             "siren": _siren_affiche(siren),
-            "siege": _esc(siege_mor or "—"),
-            "cree_le": _date_fr(identite.get("date_creation") or "—"),
+            "siege": _esc(siege_mor or "·"),
+            "cree_le": _date_fr(identite.get("date_creation") or "·"),
             "capital": _fmt_eur(identite.get("capital")),
-            "naf": _esc(identite.get("naf") or "—"),
-            "effectif": _esc(str(identite["effectif"])) if identite.get("effectif") is not None else "—",
+            "naf": _esc(identite.get("naf") or "·"),
+            "effectif": _esc(str(identite["effectif"])) if identite.get("effectif") is not None else "·",
             "dirigeants": _esc(" ; ".join(f"{dg['nom']} ({dg['qualite']})" for dg in dirigeants if dg.get("nom"))) if dirigeants else "non publiés au registre à ce jour, à obtenir de la société",
         }
 
@@ -1855,10 +1856,10 @@ async def generer_demande_refinancement(
             "montant_sans_option": montant_sans_option_ht,
             "durees": liste_durees,
             "apports": liste_apports,
-            "equipement": _esc(equip_txt) or "—",
-            "fournisseur": _esc(fournisseur_txt) or "—",
-            "devis_principal": _esc((devis_principal or "").strip()) or "— (devis joints au dossier)",
-            "devis_option": _esc((devis_option or "").strip()) or "—",
+            "equipement": _esc(equip_txt) or "·",
+            "fournisseur": _esc(fournisseur_txt) or "·",
+            "devis_principal": _esc((devis_principal or "").strip()) or "· (devis joints au dossier)",
+            "devis_option": _esc((devis_option or "").strip()) or "·",
             "livraison": _esc((livraison or "").strip()) or "à préciser avec le client",
             "devis_cites": devis_cites,
         }
