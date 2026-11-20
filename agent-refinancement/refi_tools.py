@@ -1267,6 +1267,30 @@ def _mn_pc(rn, ca) -> float | None:
         return None
 
 
+async def _contacts_compte(chttp, compte_id: str) -> list:
+    """Dirigeants connus au CRM : Contacts rattachés au compte, [{nom, qualite}].
+    Règle d'Olivier : le CRM est la base la plus à jour, on consulte donc les
+    contacts AVANT le registre national (récupéré par _fiche_pappers).
+    Noms stockés en majuscules au CRM : capitalisation pour le document."""
+    if not compte_id:
+        return []
+    r = await chttp.get(
+        f"{ZOHO_CRM}/Accounts/{compte_id}/Contacts",
+        params={"fields": "Full_Name,Title"},
+        headers=await _h(),
+    )
+    if r.status_code != 200:
+        return []
+    out = []
+    for c in r.json().get("data", []) or []:
+        nom = " ".join(w for w in ((c.get("Full_Name") or "").split()) if w)
+        if not nom:
+            continue
+        nom = " ".join(w[0] + w[1:].lower() for w in nom.split())
+        out.append({"nom": nom, "qualite": (c.get("Title") or "").strip()})
+    return out
+
+
 async def _fiche_pappers(chttp, siren: str) -> dict:
     """Fiche registre national : identité, dirigeants, finances (3 derniers
     exercices), siège. Lève RuntimeError avec un message clair si indisponible."""
@@ -1628,7 +1652,7 @@ def _page4_body(code, societe, fins, ctx) -> str:
     <p class="sous-chap">Un engagement réciproque, une réponse attendue sous {delai} jours</p>
     <p>La société {_esc(societe)}, {perf}recherche le financement en location/cession de l'équipement décrit au chapitre 4 pour {_fmt_eur(montant)} HT, sur une durée de {durees_annees}, {apports_txt}. La société s'engage à conduire l'opération avec l'organisme dont la proposition sera retenue.</p>
     <p>Nous demandons à votre organisme&nbsp;: une réponse par oui ou par non, au moyen de la page ci-après&nbsp;; en cas d'accord, les taux nominaux annuels garantis selon la grille du chapitre 5, les éventuels frais de dossier, et leur durée de validité. Un retour sous {delai} jours permettrait de présenter le montage à la société dans les meilleures conditions. Les propositions des organismes non retenus demeureront strictement confidentielles.</p>
-    <p class="aise">{EMETTEUR['nom']} est l'interlocuteur unique du dossier et transmet toutes les pièces complémentaires sur simple demande&nbsp;: {EMETTEUR['representant']}, {EMETTEUR['tel']}, {EMETTEUR['email']}.</p>
+    <p class="aise">{EMETTEUR['nom']} est l'interlocuteur unique du dossier et transmet toutes les pièces complémentaires sur simple demande&nbsp;:<br/><strong>{EMETTEUR['representant']}</strong>, {EMETTEUR['tel']}, {EMETTEUR['email']}.</p>
     <p class="mention">Document d'information établi par {EMETTEUR['nom']} à partir de données publiques et des devis fournisseurs cités. Il ne constitue ni une offre de crédit, ni un conseil en investissement. Les chiffres de la société proviennent de ses comptes publiés&nbsp;; les montants du projet, des devis fournisseurs cités.</p>
 """
 
@@ -1653,7 +1677,7 @@ def _page5_body(code, nom_org, validite, ctx) -> str:
       <tr><th>Taux indexé (nominal et indice)</th><td class="a-remplir">&nbsp;</td></tr>
       <tr><th>Conditions d'assurance demandées</th><td class="a-remplir">&nbsp;</td></tr>
     </table>
-    <p class="a-remplir"><span class="case"></span>&nbsp;&nbsp;<strong>La demande n'est pas acceptée.</strong> motif principal&nbsp;: …………………………………………………………………………</p>
+    <p class="a-remplir" style="text-align:left"><span class="case"></span>&nbsp;&nbsp;<strong>La demande n'est pas acceptée.</strong> motif principal&nbsp;: <span class="ligne-reponse"></span></p>
     <p style="margin-top:4.5mm">Fait à …………………………, le …………………………</p>
     <p style="margin-top:3mm">Lu et approuvé, bon pour accord sur les taux indiqués ci-dessus,</p>
     <p>Nom et qualité du représentant habilité&nbsp;: ………………………………………………</p>
@@ -1783,6 +1807,11 @@ async def generer_demande_refinancement(
         fins = (fiche or {}).get("finances") or []
         identite = (fiche or {}).get("identite") or {}
         dirigeants = (fiche or {}).get("dirigeants") or []
+        # Règle d'Olivier : le CRM est la base la plus à jour. Les dirigeants
+        # connus du CRM (Contacts du compte) PRIMENT sur le registre national.
+        contacts_crm = await _contacts_compte(chttp, compte_id)
+        if contacts_crm:
+            dirigeants = contacts_crm
 
         siege_pap = (fiche or {}).get("siege") or {}
         rue = ((compte.get("Billing_Street") or "") or (siege_pap.get("adresse") or "")).strip()
