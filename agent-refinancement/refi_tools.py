@@ -650,7 +650,7 @@ async def preparer_client(
                 }, ensure_ascii=False)
 
         # --- 2. compte Zoho existant ? ---
-        existant = await _search("Accounts", f"(SIRET:equals:{siren})", "id,Account_Name,SIRET,Billing_Street,Billing_City,Billing_Zip_Code,Billing_State,Description")
+        existant = await _search("Accounts", f"(SIRET:equals:{siren})", "id,Account_Name,SIRET,Billing_Street,Billing_City,Billing_Code,Billing_State,Description")
 
         # --- 3. registre national : fiche + finances (+ scoring si demandé) ---
         identite: dict = {}
@@ -716,7 +716,7 @@ async def preparer_client(
                     "SIRET": siren,
                     "Billing_Street": adresse_siege or None,
                     "Billing_City": siege.get("ville") or None,
-                    "Billing_Zip_Code": siege.get("code_postal") or None,
+                    "Billing_Code": siege.get("code_postal") or None,
                     "Billing_State": siege.get("region") or None,
                     "Description": _note("", "fiche créée par l'agent refinancement pour un dossier de crédit-bail (source : registre national)"),
                 }],
@@ -754,8 +754,8 @@ async def preparer_client(
             if siege.get("ville") and not (compte.get("Billing_City") or "").strip():
                 modifs["Billing_City"] = siege.get("ville")
                 maj_champs.append("ville")
-            if siege.get("code_postal") and not (compte.get("Billing_Zip_Code") or "").strip():
-                modifs["Billing_Zip_Code"] = siege.get("code_postal")
+            if siege.get("code_postal") and not (compte.get("Billing_Code") or "").strip():
+                modifs["Billing_Code"] = siege.get("code_postal")
                 maj_champs.append("code postal")
             if len(modifs) > 1:
                 desc = await _lire_description(chttp, "Accounts", compte_id)
