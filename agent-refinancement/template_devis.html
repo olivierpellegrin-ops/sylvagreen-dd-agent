@@ -1,0 +1,260 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8" />
+<title>Devis de location/cession, {{DOSSIER_LIB}}, dossier {{CODE}}</title>
+<style>
+  :root { --vert: #2c5a1e; --vert-fonce: #1d3a14; --gris: #555; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; background: #fff; }
+  body { font-family: Georgia, "DejaVu Serif", "Times New Roman", serif; color: #222; }
+  @page { size: A4; margin: 0; }
+  .sheet {
+    width: 210mm; height: 296mm; background: #fff;
+    margin: 0 auto; padding: 11mm 16mm 8mm 16mm;
+    display: flex; flex-direction: column;
+    page-break-after: always; break-after: page;
+    position: relative;
+  }
+  .sheet:last-child { page-break-after: auto; break-after: auto; }
+  @media screen {
+    body { background: #dcded9; padding: 8mm 0; }
+    .sheet { margin: 0 auto 8mm auto; box-shadow: 0 2px 12px rgba(0,0,0,.28); }
+  }
+  .page-head {
+    display: flex; justify-content: space-between; align-items: center;
+    border-bottom: 1.5px solid var(--vert); padding-bottom: 2mm; margin-bottom: 4mm;
+  }
+  .page-head img { height: 11mm; }
+  .page-head .doc-ref { text-align: right; font-size: 10.5px; color: var(--vert-fonce); line-height: 1.35; }
+  .page-head .doc-ref strong { font-size: 11.5px; letter-spacing: .3px; }
+  .body { flex: 1 1 auto; overflow: hidden; }
+  h2 { font-size: 13.5px; color: var(--vert); border-bottom: 1px solid var(--vert); padding-bottom: 1px; margin: 3mm 0 1.5mm 0; text-transform: uppercase; letter-spacing: .4px; }
+  p, li { font-size: 13px; line-height: 1.38; text-align: justify; margin: 0 0 1.2mm 0; }
+  ul { margin: 0 0 1.2mm 0; padding-left: 16px; }
+  li { margin-bottom: .5mm; }
+  table { width: 100%; border-collapse: collapse; font-size: 12.5px; margin: 1.5mm 0; }
+  th, td { border: 1px solid #b9c7b2; padding: 4px 8px; text-align: left; }
+  th { background: #e7efe3; color: var(--vert-fonce); }
+  td.num, th.num { text-align: right; white-space: nowrap; }
+  .encadre { background: #eef4ec; border-left: 3px solid var(--vert); padding: 5px 11px; margin: 2mm 0; font-size: 12.4px; line-height: 1.42; text-align: justify; }
+  .mention { font-size: 11.6px; color: var(--gris); }
+  .page-foot {
+    border-top: 1.5px solid var(--vert); padding-top: 1.8mm; margin-top: 3mm;
+    display: flex; justify-content: space-between; align-items: center;
+    font-size: 9.5px; color: #333;
+  }
+  .page-foot strong { color: var(--vert-fonce); }
+  .todo { color: #8a8f8a; font-style: italic; }
+  .badge-maquette { background: #f4f1e6; border: 1px solid #b8a95c; color: #6b5e14;
+    font-size: 11px; padding: 2px 10px; margin: 0 0 2mm 0; text-align: center; }
+  .sous-chap { font-size: 12.6px; font-style: italic; color: var(--gris); margin: 0 0 2mm 0; }
+  .sources { font-size: 11px; color: var(--gris); font-style: italic; margin-top: 1.5mm; }
+  .case { display: inline-block; width: 9px; height: 9px; border: 1.2px solid #333; margin-right: 2px; }
+  .ligne-a-remplir { display: inline-block; width: 60mm; height: 0; border-bottom: 1px solid #666; vertical-align: baseline; }
+  /* ---- le loyer en vedette ---- */
+  .loyer-hero {
+    border: 2px solid var(--vert); background: #eef4ec;
+    padding: 5mm 8mm; margin: 2mm 0 3mm 0; text-align: center;
+  }
+  .loyer-hero .lab { font-size: 13px; text-transform: uppercase; letter-spacing: 1.4px; color: var(--vert-fonce); }
+  .loyer-hero .val { font-size: 34px; color: var(--vert); font-weight: bold; line-height: 1.2; margin: 1.5mm 0; }
+  .loyer-hero .val .devise { font-size: 19px; }
+  .loyer-hero .sub { font-size: 12.2px; color: var(--gris); line-height: 1.4; }
+  .loyer-hero .sub strong { color: var(--vert-fonce); }
+  /* ---- couverture ---- */
+  .cover .body { display: flex; flex-direction: column; justify-content: center; align-items: center; text-align: center; }
+  .cover .logo-couv { height: 18mm; margin: 0 auto 14mm auto; display: block; }
+  .titre-couv { font-size: 28px; color: var(--vert-fonce); text-transform: uppercase; letter-spacing: 2px; margin: 0 auto; line-height: 1.3; text-align: center; }
+  .cover .couv-cols { position: absolute; left: 16mm; right: 16mm; bottom: 18mm; display: grid; grid-template-columns: 1fr 2px 1fr; align-items: stretch; }
+  .couv-cols .sep { background: var(--vert); }
+  .couv-cols .col { padding: 2mm 12mm; font-size: 12px; line-height: 1.6; text-align: left; }
+  .couv-cols .col.d { text-align: right; }
+  .couv-cols .role { display: block; font-style: italic; color: var(--gris); font-size: 11px; margin-top: 1.5mm; }
+</style>
+</head>
+<body>
+
+<!-- ================= COUVERTURE ================= -->
+<div class="sheet cover">
+  <div class="body">
+    <img class="logo-couv" src="data:image/png;base64,{{LOGO}}" alt="{{EM_NOM_MAJ}}" />
+    <div class="titre-couv">Devis de location/cession</div>
+  </div>
+  <div class="couv-cols">
+    <div class="col g">
+      <strong>{{EM_NOM_MAJ}}</strong><br/>
+      {{EM_ADRESSE}}<br/>
+      {{EM_TEL}}<br/>
+      {{EM_EMAIL}}
+      <span class="role">«&nbsp;l'auteur du devis&nbsp;»</span>
+    </div>
+    <div class="sep"></div>
+    <div class="col d">
+      <strong>{{CLIENT_NOM_MAJ}}</strong><br/>
+      {{CLIENT_ADR}}<br/>
+      Dossier {{CODE}} · version {{VERSION}}<br/>
+      Date : {{DATE_FR}}
+      <span class="role">«&nbsp;le Destinataire&nbsp;»</span>
+    </div>
+  </div>
+</div>
+
+<!-- ================= PAGE 1 : L'OFFRE ================= -->
+<div class="sheet">
+  <div class="page-head">
+    <img src="data:image/png;base64,{{LOGO}}" alt="{{EM_NOM_MAJ}}" />
+    <div class="doc-ref"><strong>Devis de location/cession</strong><br/>{{CLIENT_NOM}} · Dossier {{CODE}}, version {{VERSION}}<br/>Date : {{DATE_FR}}</div>
+  </div>
+  <div class="body">
+    {{BADGE_MAQUETTE}}
+    <h2>1. L'offre en un coup d'œil</h2>
+    <p class="sous-chap">{{ACCORD_MENTION}}</p>
+    <div class="loyer-hero">
+      <div class="lab">Votre loyer mensuel</div>
+      <div class="val">{{LOYER_HT}}&nbsp;<span class="devise">€ HT / mois</span></div>
+      <div class="sub">loyer fixe pendant {{DUREE_MOIS}} mois, <strong>sans aucun apport à prévoir</strong><br/>
+      avec l'option « Protection intégrale » (chapitre 4) : <strong>{{LOYER_TC}}&nbsp;€ HT / mois</strong></div>
+    </div>
+    <table>
+      <tr><th style="width:38%">Équipement financé</th><td>{{EQUIPEMENT_LIB}}</td></tr>
+      <tr><th>Montant de l'investissement</th><td>{{MONTANT_EQ_HT}}&nbsp;€ HT</td></tr>
+      <tr><th>Durée de la location</th><td>{{DUREE_MOIS}} mois · {{NB_LOYERS}} loyers mensuels fixes</td></tr>
+      <tr><th>Apport à prévoir</th><td>aucun : financement à 100&nbsp;% de l'investissement</td></tr>
+      <tr><th>Premier loyer</th><td>à la mise en service de l'équipement</td></tr>
+      <tr><th>Option de cession au terme</th><td>{{VR}}&nbsp;€ HT, payable au moment de la cession</td></tr>
+      <tr><th>Fiscalité</th><td>loyers déductibles du résultat ; TVA sur les loyers récupérable (assujetti)</td></tr>
+      <tr><th>Validité de l'offre</th><td>{{VALIDITE_JOURS}} jours à compter du {{DATE_FR}}</td></tr>
+    </table>
+    <p>{{EM_NOM}} vous propose le financement en location/cession de l'équipement décrit au chapitre 2. Vous disposez de l'équipement immédiatement, sans mobiliser votre trésorerie : le bien est acquis pour vous par l'organisme de financement partenaire de l'opération, mis à disposition contre un loyer mensuel fixe, puis cédé à votre société au terme du contrat, à sa valeur vénale.</p>
+    <p class="sources">Sources&nbsp;: devis fournisseurs cités au chapitre 2, dossier {{CODE}} (CRM de {{EM_NOM}}).</p>
+  </div>
+  <div class="page-foot">
+    <span><strong>{{EM_NOM}}</strong></span>
+    <span>Siret : {{EM_SIRET}} · Devis {{CODE}} v{{VERSION}} · Document confidentiel</span>
+    <span>Page 1 / 5</span>
+  </div>
+</div>
+
+<!-- ================= PAGE 2 : L'ÉQUIPEMENT ================= -->
+<div class="sheet">
+  <div class="page-head">
+    <img src="data:image/png;base64,{{LOGO}}" alt="{{EM_NOM_MAJ}}" />
+    <div class="doc-ref"><strong>Devis de location/cession</strong><br/>{{CLIENT_NOM}} · Dossier {{CODE}}, version {{VERSION}}<br/>Date : {{DATE_FR}}</div>
+  </div>
+  <div class="body">
+    <h2>2. L'équipement financé</h2>
+    <p class="sous-chap">{{EQUIPEMENT_LIB}}</p>
+    <table>
+      <tr><th style="width:56%">Désignation</th><th>Référence du devis fournisseur</th><th class="num" style="width:18%">Montant HT</th></tr>
+      {{TABLE_EQUIPEMENT}}
+      <tr><th colspan="2" style="text-align:right">Total de l'investissement</th><th class="num">{{MONTANT_EQ_HT}}&nbsp;€</th></tr>
+    </table>
+    <p>{{PARAGRAPHE_EQUIPEMENT}}</p>
+    <p class="mention">{{MENTION_EQUIPEMENT}}</p>
+    <p class="sources">Sources&nbsp;: devis fournisseurs cités, dossier {{CODE}} (CRM de {{EM_NOM}}).</p>
+  </div>
+  <div class="page-foot">
+    <span><strong>{{EM_NOM}}</strong></span>
+    <span>Siret : {{EM_SIRET}} · Devis {{CODE}} v{{VERSION}} · Document confidentiel</span>
+    <span>Page 2 / 5</span>
+  </div>
+</div>
+
+<!-- ================= PAGE 3 : LE MONTAGE ================= -->
+<div class="sheet">
+  <div class="page-head">
+    <img src="data:image/png;base64,{{LOGO}}" alt="{{EM_NOM_MAJ}}" />
+    <div class="doc-ref"><strong>Devis de location/cession</strong><br/>{{CLIENT_NOM}} · Dossier {{CODE}}, version {{VERSION}}<br/>Date : {{DATE_FR}}</div>
+  </div>
+  <div class="body">
+    <h2>3. Le montage location/cession</h2>
+    <p class="sous-chap">Un financement en trois temps, sans mobiliser votre trésorerie</p>
+    <p><strong>Pendant la durée du contrat.</strong> L'organisme de financement partenaire acquiert pour votre société l'équipement neuf décrit au chapitre 2, auprès du fournisseur. L'équipement est mis à votre disposition : vous l'utilisez en totalité, moyennant un loyer mensuel fixe de {{LOYER_HT}}&nbsp;€ HT. Vous ne financez que l'usage : votre trésorerie reste disponible pour votre exploitation.</p>
+    <p><strong>Au terme des {{DUREE_MOIS}} mois.</strong> L'équipement vous est cédé, à sa valeur vénale convenue dès l'origine&nbsp;: {{VR}}&nbsp;€ HT. Votre société devient propriétaire de l'équipement qu'elle a financé.</p>
+    <p><strong>Pendant toute l'opération.</strong> {{EM_NOM}} conduit le montage de bout en bout : structuration du financement avec l'organisme partenaire, suivi de la commande et de la livraison, et coordination des pièces jusqu'à la cession finale.</p>
+    <div class="encadre">
+      <strong>Ce que la location/cession vous apporte&nbsp;:</strong>
+      <ul style="margin-top:1.5mm">
+        <li><strong>Aucun apport</strong>&nbsp;: l'investissement est financé à 100&nbsp;%, votre trésorerie n'est pas mobilisée et votre capacité d'endettement bancaire est préservée&nbsp;;</li>
+        <li><strong>Un loyer fixe</strong>, connu dès la signature, déductible de votre résultat imposable&nbsp;; la TVA sur les loyers est récupérable&nbsp;;</li>
+        <li><strong>La maîtrise de votre outil de production</strong>&nbsp;: équipement neuf, gardé au terme du contrat par simple cession à sa valeur vénale.</li>
+      </ul>
+    </div>
+    <p class="mention">Le contrat de location est établi avec l'organisme de financement partenaire de l'opération ; {{EM_NOM}} en assure la préparation et le suivi. Le traitement comptable (hors bilan en normes françaises) sera confirmé avec votre expert-comptable.</p>
+    <p class="sources">Sources&nbsp;: dossier {{CODE}} (CRM de {{EM_NOM}}), accords de l'organisme partenaire.</p>
+  </div>
+  <div class="page-foot">
+    <span><strong>{{EM_NOM}}</strong></span>
+    <span>Siret : {{EM_SIRET}} · Devis {{CODE}} v{{VERSION}} · Document confidentiel</span>
+    <span>Page 3 / 5</span>
+  </div>
+</div>
+
+<!-- ================= PAGE 4 : L'OPTION PROTECTION ================= -->
+<div class="sheet">
+  <div class="page-head">
+    <img src="data:image/png;base64,{{LOGO}}" alt="{{EM_NOM_MAJ}}" />
+    <div class="doc-ref"><strong>Devis de location/cession</strong><br/>{{CLIENT_NOM}} · Dossier {{CODE}}, version {{VERSION}}<br/>Date : {{DATE_FR}}</div>
+  </div>
+  <div class="body">
+    <h2>4. Option « Protection intégrale »</h2>
+    <p class="sous-chap">L'option qui sécurise votre production et vos dirigeants</p>
+    <p>Votre écorçage travaille des volumes importants : une avarie de machine immobilise toute la ligne. L'option « Protection intégrale » regroupe les trois couvertures utiles à votre exploitation&nbsp;:</p>
+    <table>
+      <tr><th style="width:30%">Couverture</th><th>Ce qu'elle couvre</th></tr>
+      <tr><td><strong>Dommages à l'équipement</strong></td><td>bris de machine, accident, destruction&nbsp;: l'équipement financé est réparé ou remplacé, votre production reprend&nbsp;;</td></tr>
+      <tr><td><strong>Perte financière</strong></td><td>en cas de sinistre total, la couverture comble l'écart entre l'indemnité d'assurance et le capital restant dû&nbsp;: aucune somme ne reste à votre charge pour solder le financement&nbsp;;</td></tr>
+      <tr><td><strong>Protection des dirigeants</strong></td><td>décès, perte totale et irréversible d'autonomie ou invalidité du dirigeant&nbsp;: les loyers restants sont pris en charge, vos cautions personnelles sont préservées.</td></tr>
+    </table>
+    <p>Coût de l'option&nbsp;: <strong>{{LOYER_ASS}}&nbsp;€ HT / mois</strong>, intégrés au loyer mensuel, soit un loyer tout compris de <strong>{{LOYER_TC}}&nbsp;€ HT / mois</strong>. L'option se souscrit à la signature&nbsp;; elle reste facultative.</p>
+    <p><span class="case"></span>&nbsp;&nbsp;<strong>Je souscris l'option « Protection intégrale »</strong>&nbsp;: loyer mensuel tout compris de {{LOYER_TC}}&nbsp;€ HT.</p>
+    <p><span class="case"></span>&nbsp;&nbsp;<strong>Je ne souscris pas l'option</strong>&nbsp;: loyer mensuel de {{LOYER_HT}}&nbsp;€ HT, l'équipement reste à assurer par mes soins (obligation contractuelle).</p>
+    <p class="mention">Les couvertures exactes (franchises, limites, exclusions) seront détaillées dans la notice du contrat. À définir avec l'organisme partenaire le jour de la signature.</p>
+    <p class="sources">Sources&nbsp;: gammes d'assurance de l'organisme de financement partenaire, dossier {{CODE}} (CRM de {{EM_NOM}}).</p>
+  </div>
+  <div class="page-foot">
+    <span><strong>{{EM_NOM}}</strong></span>
+    <span>Siret : {{EM_SIRET}} · Devis {{CODE}} v{{VERSION}} · Document confidentiel</span>
+    <span>Page 4 / 5</span>
+  </div>
+</div>
+
+<!-- ================= PAGE 5 : CONDITIONS ET BON POUR ACCORD ================= -->
+<div class="sheet">
+  <div class="page-head">
+    <img src="data:image/png;base64,{{LOGO}}" alt="{{EM_NOM_MAJ}}" />
+    <div class="doc-ref"><strong>Devis de location/cession</strong><br/>{{CLIENT_NOM}} · Dossier {{CODE}}, version {{VERSION}}<br/>Date : {{DATE_FR}}</div>
+  </div>
+  <div class="body">
+    <h2>5. Conditions de l'offre</h2>
+    <p class="sous-chap">Une offre ferme, issue des accords conclus avec l'organisme partenaire</p>
+    <p>{{ACCORD_MENTION}} Les loyers indiqués sont garantis pendant {{VALIDITE_JOURS}} jours à compter de la date du présent devis. Passé ce délai, une nouvelle version sera établie.</p>
+    <table>
+      <tr><th style="width:38%">Livraison de l'équipement</th><td>{{LIVRAISON_TXT}}</td></tr>
+      <tr><th>Début des loyers</th><td>à la mise en service, constatée par procès-verbal de réception</td></tr>
+      <tr><th>Loyers</th><td>{{NB_LOYERS}} loyers mensuels de {{LOYER_HT}}&nbsp;€ HT, prélèvements mensuels</td></tr>
+      <tr><th>Option de cession</th><td>{{VR}}&nbsp;€ HT au terme des {{DUREE_MOIS}} mois</td></tr>
+      <tr><th>Assurance de l'équipement</th><td>obligatoire&nbsp;: couvertures au choix au chapitre 4</td></tr>
+    </table>
+    <h2 style="margin-top:4mm">Annexe chiffrée</h2>
+    <table>
+      <tr><th style="width:38%">Total des loyers sur la durée</th><td class="num">{{TOTAL_LOYERS}}&nbsp;€ HT</td></tr>
+      <tr><th>Option de cession au terme</th><td class="num">{{VR}}&nbsp;€ HT</td></tr>
+      <tr><th>Coût total du financement</th><td class="num">{{COUT_TOTAL}}&nbsp;€ HT</td></tr>
+    </table>
+    <p class="mention">L'annexe est fournie à titre de transparence. Votre engagement se lit chaque mois&nbsp;: le loyer fixe ci-dessus.</p>
+    <p>Pour donner suite, il vous suffit de porter vos initiales sur la case du chapitre 4 et de dater le présent devis ci-dessous. {{EM_NOM}} prépare ensuite le contrat de location/cession avec l'organisme partenaire et suit la commande de l'équipement jusqu'à sa mise en service.</p>
+    <p style="margin-top:4mm">Fait à <span class="ligne-a-remplir"></span>, le <span class="ligne-a-remplir" style="width:35mm"></span></p>
+    <p style="margin-top:3mm">Nom et qualité du signataire&nbsp;: <span class="ligne-a-remplir" style="width:75mm"></span></p>
+    <p>Bon pour accord, date et signature&nbsp;:</p>
+  </div>
+  <div class="page-foot">
+    <span><strong>{{EM_NOM}}</strong></span>
+    <span>Siret : {{EM_SIRET}} · Devis {{CODE}} v{{VERSION}} · Document confidentiel</span>
+    <span>Page 5 / 5</span>
+  </div>
+</div>
+
+</body>
+</html>
